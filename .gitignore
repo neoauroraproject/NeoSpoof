@@ -1,0 +1,5 @@
+data/
+*.exe
+neospoof
+neospoof-linux
+neospoof-linux-*
