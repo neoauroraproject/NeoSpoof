@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>نئو اسپوف</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='8' fill='none' stroke='%233B82F6' stroke-width='2'/%3E%3Ccircle cx='12' cy='12' r='3' fill='%23F97316'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="toasts" class="toasts" role="region" aria-label="پیام‌ها" aria-live="polite"></div>
+
+  <!-- ===== Login ===== -->
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="card stack" style="width:min(440px,100%)">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
+        <span>نئو اسپوف</span>
+      </div>
+      <h1>ورود</h1>
+      <p class="muted lead">رمز را از خروجی همان دستوری بردارید که پنل را بالا آورده است.</p>
+      <label>نام کاربری
+        <input id="username" name="username" type="text" autocomplete="username" value="admin" required>
+      </label>
+      <label>رمز عبور
+        <div class="field-pw">
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <button class="pw-toggle" type="button" data-pw="password" aria-label="نمایش رمز" aria-pressed="false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+      </label>
+      <p id="login-error" class="alert" role="alert" hidden></p>
+      <button class="cta" type="submit">ورود</button>
+    </form>
+  </div>
+
+  <!-- ===== License activation ===== -->
+  <div id="license-screen" class="login-screen" hidden>
+    <form id="license-form" class="card stack" style="width:min(460px,100%)">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
+        <span>فعال‌سازی لایسنس</span>
+      </div>
+      <h1>فعال‌سازی</h1>
+      <p class="muted lead">برای نصب، کلید لایسنس را وارد کنید. سیستم آن را با سرور لایسنس چک و به <b>آی‌پی همین سرور</b> قفل می‌کند؛ بعد از آن روی سرور دیگری کار نمی‌کند.</p>
+      <label>کلید لایسنس
+        <input id="license-key" type="text" class="ltr" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" required>
+      </label>
+      <p id="license-status" class="notice" hidden></p>
+      <p id="license-error" class="alert" role="alert" hidden></p>
+      <div class="actions">
+        <button class="cta" type="submit">فعال‌سازی و نصب</button>
+        <button id="license-logout" class="ghost" type="button">خروج</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ===== App ===== -->
+  <div id="app" hidden>
+    <header class="top">
+      <div class="wrap">
+        <div class="top-row">
+          <div class="brand">
+            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
+            <span>نئو اسپوف</span>
+            <span id="ver" class="ver" hidden></span>
+          </div>
+          <div class="row">
+            <span id="live" class="live"><span class="pulse"></span><span id="live-text">آماده</span></span>
+            <button id="theme" class="ghost icon-only" type="button" aria-label="تغییر تم"></button>
+            <button id="logout" class="ghost icon-btn" type="button">خروج</button>
+          </div>
+        </div>
+        <nav class="nav" role="tablist" aria-label="بخش‌ها">
+          <button class="tab" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="true" aria-controls="view-simple">تست ساده</button>
+          <button class="tab" type="button" role="tab" id="tab-list" data-view="list" aria-selected="false" aria-controls="view-list" tabindex="-1">تست لیست</button>
+          <button class="tab" type="button" role="tab" id="tab-tunnels" data-view="tunnels" aria-selected="false" aria-controls="view-tunnels" tabindex="-1">تانل‌ها</button>
+          <button class="tab" type="button" role="tab" id="tab-settings" data-view="settings" aria-selected="false" aria-controls="view-settings" tabindex="-1">تنظیمات</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div id="cap-banner" class="notice" hidden>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+        <span id="cap-text"></span>
+      </div>
+
+      <!-- Simple -->
+      <section id="view-simple" class="panel" role="tabpanel" aria-labelledby="tab-simple" tabindex="0">
+        <div class="card stack">
+          <h2>تست ساده</h2>
+          <p class="muted lead">وقتی مسیر عادی برقرار است، فقط آی‌پی سرور مقصد را بزنید. پنل هشت بسته با سورس <span class="ltr">192.0.2.1</span> می‌فرستد تا معلوم شود اسپوف باز است یا نه.</p>
+          <div class="stack">
+            <p id="simple-role-label">نقش این دستگاه</p>
+            <div class="roles" role="group" aria-labelledby="simple-role-label">
+              <button class="tab" type="button" data-role="sender" data-group="simple" aria-pressed="true">از اینجا می‌فرستم</button>
+              <button class="tab" type="button" data-role="receiver" data-group="simple" aria-pressed="false">اینجا گوش می‌دهد</button>
+            </div>
+          </div>
+          <label id="simple-dst-label">آی‌پی سرور مقصد
+            <input id="simple-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+            <span class="hint">گیرنده را روی همان مقصد، قبل از ارسال، شروع کنید. نتیجه آنجا دیده می‌شود.</span>
+          </label>
+          <div class="actions">
+            <button id="simple-start" class="cta icon-btn" type="button">شروع</button>
+            <button id="simple-stop" class="ghost" type="button" hidden>توقف</button>
+          </div>
+          <p id="simple-error" class="alert" role="alert" hidden></p>
+        </div>
+        <section id="simple-result" class="card stack"></section>
+      </section>
+
+      <!-- List -->
+      <section id="view-list" class="panel" role="tabpanel" aria-labelledby="tab-list" tabindex="0" hidden>
+        <div class="card stack">
+          <h2>تست لیست</h2>
+          <p class="muted lead">تا ۱۰۰۰ آی‌پی را بگذارید و آی‌پی سرور مقصد را وارد کنید. پنل مقصد نشان می‌دهد کدام سورس سالم رسیده، کدام عوض شده و کدام نرسیده است.</p>
+          <div class="stack">
+            <p id="list-role-label">نقش این دستگاه</p>
+            <div class="roles" role="group" aria-labelledby="list-role-label">
+              <button class="tab" type="button" data-role="sender" data-group="list" aria-pressed="true">از اینجا می‌فرستم</button>
+              <button class="tab" type="button" data-role="receiver" data-group="list" aria-pressed="false">اینجا گوش می‌دهد</button>
+            </div>
+          </div>
+          <label id="list-dst-label">آی‌پی سرور مقصد
+            <input id="list-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+          </label>
+          <label>لیست آی‌پی
+            <textarea id="list-ips" class="ltr" spellcheck="false" placeholder="192.0.2.10&#10;192.0.2.11"></textarea>
+            <span id="list-count" class="hint">۰ آی‌پی</span>
+          </label>
+          <div class="actions">
+            <button id="suggest-ips" class="ghost" type="button">آی‌پی‌های پیشنهادی</button>
+            <button id="list-start" class="cta" type="button">شروع</button>
+            <button id="list-stop" class="ghost" type="button" hidden>توقف</button>
+            <button id="copy-open" class="primary" type="button" hidden>کپی آی‌پی‌های باز</button>
+            <button id="export-csv" class="ghost" type="button" hidden>خروجی CSV</button>
+            <button id="build-tunnel" class="primary" type="button" hidden>ساخت تانل از آی‌پی‌های باز</button>
+          </div>
+          <p id="list-error" class="alert" role="alert" hidden></p>
+        </div>
+        <section id="list-result" class="card stack"></section>
+
+        <section id="tunnel-card" class="card stack" hidden>
+          <div class="row spread">
+            <h2>تانل آماده</h2>
+            <button id="tunnel-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button>
+          </div>
+          <p class="muted lead">از آی‌پی‌هایی که سالم رسیدند یک جفت کانفیگ کلاینت/سرور ساخته شد و کنار داده‌های پنل ذخیره شد. کلید و پورت‌ها در هر دو طرف یکسان‌اند.</p>
+          <dl id="tunnel-meta" class="kv"></dl>
+          <label>کلاینت — <span class="ltr">client.toml</span>
+            <textarea id="tunnel-client" class="ltr" readonly rows="8"></textarea>
+          </label>
+          <div class="actions">
+            <button class="ghost" type="button" data-copy="tunnel-client">کپی کلاینت</button>
+            <button class="ghost" type="button" data-dl="tunnel-client" data-name="client.toml">دانلود client.toml</button>
+          </div>
+          <label>سرور — <span class="ltr">server.toml</span>
+            <textarea id="tunnel-server" class="ltr" readonly rows="8"></textarea>
+          </label>
+          <div class="actions">
+            <button class="ghost" type="button" data-copy="tunnel-server">کپی سرور</button>
+            <button class="ghost" type="button" data-dl="tunnel-server" data-name="server.toml">دانلود server.toml</button>
+          </div>
+        </section>
+      </section>
+
+      <!-- Tunnels -->
+      <section id="view-tunnels" class="panel" role="tabpanel" aria-labelledby="tab-tunnels" tabindex="0" hidden>
+        <div class="card stack">
+          <h2>تانل‌ها</h2>
+          <p class="muted lead">برای هر لوکیشن یک تانل بساز؛ هرکدام روی یک <b>پورت SOCKS جدا</b> بالا می‌آید. اگر آی‌پی اسپوف ندهی، آی‌پی‌های بازِ آخرین تست استفاده می‌شوند.</p>
+          <div class="grid2">
+            <label>نام لوکیشن
+              <input id="tn-name" type="text" placeholder="مثلاً آلمان">
+            </label>
+            <label>آی‌پی سرور مقصد
+              <input id="tn-peer" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+            </label>
+            <label>پورت SOCKS
+              <input id="tn-socks" type="number" class="ltr" min="1024" max="65535" value="1080">
+            </label>
+          </div>
+          <label>آی‌پی‌های اسپوف (اختیاری)
+            <textarea id="tn-ips" class="ltr" spellcheck="false" placeholder="خالی = آی‌پی‌های بازِ آخرین تست"></textarea>
+          </label>
+          <p id="tn-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button id="tn-create" class="cta" type="button">افزودن تانل</button></div>
+        </div>
+        <section id="tn-list" class="card stack" aria-live="polite"></section>
+        <section id="tn-logs-card" class="card stack" hidden>
+          <div class="row spread"><h3>لاگ لوکیشن</h3><button id="tn-logs-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button></div>
+          <pre id="tn-logs" class="logbox ltr"></pre>
+        </section>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="panel" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
+        <form id="probe-form" class="card stack">
+          <h2>تنظیمات تست</h2>
+          <p class="muted lead">این مقدارها روی تست بعدی اثر می‌گذارند و ذخیره می‌شوند.</p>
+          <label>مدت گوش دادن (ثانیه)
+            <input id="set-listen" type="number" class="ltr" min="30" max="900" step="10" inputmode="numeric">
+            <span class="hint">بین ۳۰ تا ۹۰۰ ثانیه. گیرنده بعد از این مدت خودکار تمام می‌کند.</span>
+          </label>
+          <label>نرخ ارسال (بسته در ثانیه)
+            <input id="set-pps" type="number" class="ltr" min="1" max="500" step="1" inputmode="numeric">
+            <span class="hint">بین ۱ تا ۵۰۰. نرخ بالاتر تست را سریع‌تر ولی پرسروصداتر می‌کند.</span>
+          </label>
+          <p id="probe-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button class="cta" type="submit">ذخیره تنظیمات</button></div>
+        </form>
+
+        <form id="password-form" class="card stack">
+          <h2>تغییر رمز</h2>
+          <p class="muted">بعد از ذخیره، همین نشست باز می‌ماند و رمز قبلی دیگر کار نمی‌کند.</p>
+          <label>رمز فعلی
+            <div class="field-pw">
+              <input id="pw-current" type="password" autocomplete="current-password" required>
+              <button class="pw-toggle" type="button" data-pw="pw-current" aria-label="نمایش رمز" aria-pressed="false">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          </label>
+          <label>رمز جدید
+            <div class="field-pw">
+              <input id="pw-next" type="password" autocomplete="new-password" minlength="10" maxlength="128" required>
+              <button class="pw-toggle" type="button" data-pw="pw-next" aria-label="نمایش رمز" aria-pressed="false">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+            <span class="hint">بین ۱۰ تا ۱۲۸ نویسه.</span>
+          </label>
+          <p id="pw-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button class="cta" type="submit">ذخیره رمز</button></div>
+        </form>
+
+        <div class="card stack">
+          <h3>وضعیت سرور</h3>
+          <dl id="server-info" class="kv"></dl>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

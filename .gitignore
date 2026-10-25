@@ -1,0 +1,5 @@
+data/
+*.exe
+spoofd
+spoofd-linux
+secrets/

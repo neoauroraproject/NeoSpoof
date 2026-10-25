@@ -1,0 +1,664 @@
+package main
+
+import (
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const version = "1.0.0"
+
+//go:embed web
+var webFS embed.FS
+
+type server struct {
+	auth     *authStore
+	probe    *probeEngine
+	settings *settingsStore
+	license  *licenseManager
+	manager  *tunnelManager
+	dataDir  string
+}
+
+func main() {
+	dataDir := flag.String("data", "data", "پوشه ذخیره رمز و تنظیمات")
+	reset := flag.Bool("reset-password", false, "ساخت رمز تصادفی جدید")
+	addr := flag.String("addr", "0.0.0.0", "نشانی شبکه برای گوش دادن")
+	port := flag.Int("port", 0, "پورت ثابت (۰ یعنی پورت تصادفی)")
+	licenseProxy := flag.String("license-proxy", "", "پروکسی SOCKS5 برای چک لایسنس (host:port)")
+	corePath := flag.String("core", "client", "مسیر باینری هسته‌ی اسپوف که هر تانل اجرا می‌شود")
+	flag.Parse()
+
+	auth, password, created, err := openAuth(*dataDir, *reset)
+	if err != nil {
+		log.Fatal(err)
+	}
+	set, err := openSettings(*dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	lic, err := openLicense(*dataDir, *licenseProxy)
+	if err != nil {
+		log.Fatal(err)
+	}
+	mgr, err := openManager(*dataDir, *corePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	ln, boundPort, err := listen(*addr, *port)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	s := &server{auth: auth, probe: newProbe(), settings: set, license: lic, manager: mgr, dataDir: *dataDir}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleStatic)
+	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/logout", s.guard(s.handleLogout))
+	mux.HandleFunc("/api/me", s.guard(s.handleMe))
+	mux.HandleFunc("/api/password", s.guard(s.handlePassword))
+	mux.HandleFunc("/api/settings", s.guard(s.handleSettings))
+	mux.HandleFunc("/api/test", s.guard(s.handleTest))
+	mux.HandleFunc("/api/test/start", s.guard(s.handleStart))
+	mux.HandleFunc("/api/test/stop", s.guard(s.handleStop))
+	mux.HandleFunc("/api/tunnel", s.guard(s.handleTunnel))
+	mux.HandleFunc("/api/license", s.guard(s.handleLicense))
+	mux.HandleFunc("/api/license/activate", s.guard(s.handleActivate))
+	mux.HandleFunc("/api/tunnels", s.guard(s.handleTunnels))
+	mux.HandleFunc("/api/tunnels/start", s.guard(s.handleTunnelStart))
+	mux.HandleFunc("/api/tunnels/stop", s.guard(s.handleTunnelStop))
+	mux.HandleFunc("/api/tunnels/delete", s.guard(s.handleTunnelDelete))
+	mux.HandleFunc("/api/tunnels/logs", s.guard(s.handleTunnelLogs))
+
+	httpServer := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	// Periodically drop expired sessions so the session map cannot grow forever.
+	go func() {
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for range t.C {
+			auth.gc()
+		}
+	}()
+
+	// Re-validate the license every 24h; on failure the last signed token stands
+	// until it expires, then the panel deactivates.
+	licCtx, licCancel := context.WithCancel(context.Background())
+	defer licCancel()
+	go lic.loop(licCtx)
+
+	printBanner(*addr, boundPort, password, created || *reset)
+	go func() {
+		if err := httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	mgr.stopAll()
+	_ = httpServer.Close()
+}
+
+func securityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Frame-Options", "DENY")
+}
+
+func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {
+	clean := path.Clean(r.URL.Path)
+	if clean == "/" || clean == "." {
+		clean = "/index.html"
+	}
+	name := "web" + clean
+	data, err := webFS.ReadFile(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	securityHeaders(w)
+	switch path.Ext(name) {
+	case ".html":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+	case ".js":
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+	case ".svg":
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "no-cache")
+	case ".woff2":
+		w.Header().Set("Content-Type", "font/woff2")
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	case ".txt":
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	_, _ = w.Write(data)
+}
+
+func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !samePanel(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := readJSON(r, &body, 1<<16); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	if body.Username != "" && body.Username != "admin" {
+		writeErr(w, http.StatusUnauthorized, "رمز نادرست است")
+		return
+	}
+	id, err := s.auth.check(body.Password)
+	if err != nil {
+		code := http.StatusUnauthorized
+		if strings.Contains(err.Error(), "دقیقه") {
+			code = http.StatusTooManyRequests
+		}
+		writeErr(w, code, err.Error())
+		return
+	}
+	setSession(w, id)
+	writeJSON(w, http.StatusOK, map[string]string{"username": "admin"})
+}
+
+func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if c, err := r.Cookie("spoofd_session"); err == nil {
+		s.auth.logout(c.Value)
+	}
+	http.SetCookie(w, &http.Cookie{Name: "spoofd_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	platform, rawReady := rawCapable()
+	cfg := s.settings.get()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"username":        "admin",
+		"platform":        platform,
+		"raw_ready":       rawReady,
+		"version":         version,
+		"listen_seconds":  cfg.ListenSeconds,
+		"packets_per_sec": cfg.PacketsPerSec,
+		"license":         s.license.status(),
+	})
+}
+
+func (s *server) handlePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Current string `json:"current"`
+		Next    string `json:"next"`
+	}
+	if err := readJSON(r, &body, 1<<16); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	id, err := s.auth.change(body.Current, body.Next)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	setSession(w, id)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, s.settings.get())
+	case http.MethodPost:
+		var body settings
+		if err := readJSON(r, &body, 1<<16); err != nil {
+			writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+			return
+		}
+		v, err := s.settings.set(body)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "ذخیره تنظیمات ناموفق بود")
+			return
+		}
+		writeJSON(w, http.StatusOK, v)
+	default:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.probe.status())
+}
+
+func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	s.probe.stop()
+	writeJSON(w, http.StatusOK, s.probe.status())
+}
+
+func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLicense(w) {
+		return
+	}
+	var body struct {
+		Mode string `json:"mode"`
+		Role string `json:"role"`
+		Dst  string `json:"dst"`
+		IPs  string `json:"ips"`
+	}
+	if err := readJSON(r, &body, 1<<20); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	var list []net.IP
+	if strings.TrimSpace(body.IPs) != "" {
+		parsed, bad := parseIPList(body.IPs)
+		if len(bad) > 0 {
+			sample := bad
+			if len(sample) > 5 {
+				sample = sample[:5]
+			}
+			writeErr(w, http.StatusBadRequest, "این مقدارها آی‌پی نیستند: "+strings.Join(sample, "، "))
+			return
+		}
+		if len(parsed) > maxListIPs {
+			writeErr(w, http.StatusBadRequest, "حداکثر ۱۰۰۰ آی‌پی مجاز است")
+			return
+		}
+		list = parsed
+	}
+	if err := s.probe.start(body.Mode, body.Role, strings.TrimSpace(body.Dst), list, s.settings.get()); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.probe.status())
+}
+
+func (s *server) handleLicense(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.license.status())
+}
+
+func (s *server) handleActivate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Key string `json:"key"`
+	}
+	if err := readJSON(r, &body, 1<<16); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	if len(key) < 8 {
+		writeErr(w, http.StatusBadRequest, "کلید لایسنس معتبر نیست")
+		return
+	}
+	if err := s.license.activate(key); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, s.license.status())
+}
+
+func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
+	case http.MethodPost:
+		var body struct {
+			Name       string   `json:"name"`
+			PeerRealIP string   `json:"peer_real_ip"`
+			SocksPort  int      `json:"socks_port"`
+			SpoofIPs   []string `json:"spoof_ips"`
+		}
+		if err := readJSON(r, &body, 1<<20); err != nil {
+			writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+			return
+		}
+		pool := body.SpoofIPs
+		if len(pool) == 0 {
+			// Fall back to the IPs that passed the last receiver test.
+			passing, _, _, _, _ := s.probe.tunnelData()
+			pool = passing
+		}
+		if len(pool) == 0 {
+			writeErr(w, http.StatusBadRequest, "آی‌پی اسپوف لازم است؛ اول تست کنید یا دستی وارد کنید")
+			return
+		}
+		toml, err := renderCandyClient(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		dto, err := s.manager.create(strings.TrimSpace(body.Name), strings.TrimSpace(body.PeerRealIP), body.SocksPort, toml)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, dto)
+	default:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) tunnelID(w http.ResponseWriter, r *http.Request) (int, bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return 0, false
+	}
+	var body struct {
+		ID int `json:"id"`
+	}
+	if err := readJSON(r, &body, 1<<16); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return 0, false
+	}
+	return body.ID, true
+}
+
+func (s *server) handleTunnelStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.manager.start(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
+}
+
+func (s *server) handleTunnelStop(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.manager.stop(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
+}
+
+func (s *server) handleTunnelDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.manager.remove(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
+}
+
+func (s *server) handleTunnelLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLicense(w) {
+		return
+	}
+	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+	lines, err := s.manager.logs(id)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"logs": lines})
+}
+
+// requireLicense blocks operational endpoints until the license is active.
+func (s *server) requireLicense(w http.ResponseWriter) bool {
+	if s.license.active() {
+		return true
+	}
+	writeErr(w, http.StatusForbidden, "لایسنس فعال نیست؛ از بخش فعال‌سازی لایسنس را وارد کنید")
+	return false
+}
+
+func (s *server) handleTunnel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLicense(w) {
+		return
+	}
+	passing, senderReal, role, _, _ := s.probe.tunnelData()
+	if role != "receiver" {
+		writeErr(w, http.StatusBadRequest, "ساخت تانل فقط از نتیجه‌ی گیرنده ممکن است")
+		return
+	}
+	if len(passing) == 0 {
+		writeErr(w, http.StatusBadRequest, "هنوز آی‌پی بازی برای ساخت تانل شناسایی نشده است")
+		return
+	}
+	localReal := ""
+	if ip := net.ParseIP(senderReal).To4(); ip != nil {
+		if out, err := outboundIP(ip); err == nil {
+			localReal = out.String()
+		}
+	}
+	clientTOML, serverTOML, meta, err := buildTunnelConfig(passing, senderReal, localReal)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Write the pair next to the panel's data so it exists on disk ("built").
+	var saved []string
+	for name, body := range map[string]string{"tunnel-client.toml": clientTOML, "tunnel-server.toml": serverTOML} {
+		p := filepath.Join(s.dataDir, name)
+		if err := os.WriteFile(p, []byte(body), 0600); err == nil {
+			saved = append(saved, p)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"client": clientTOML,
+		"server": serverTOML,
+		"meta":   meta,
+		"saved":  saved,
+	})
+}
+
+func (s *server) guard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && !samePanel(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		c, err := r.Cookie("spoofd_session")
+		if err != nil || !s.auth.valid(c.Value) {
+			writeErr(w, http.StatusUnauthorized, "وارد شوید")
+			return
+		}
+		// Slide the cookie forward to match the server-side renewal.
+		setSession(w, c.Value)
+		next(w, r)
+	}
+}
+
+func samePanel(r *http.Request) bool {
+	return r.Header.Get("X-Requested-With") == "spoofd"
+}
+
+func setSession(w http.ResponseWriter, id string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "spoofd_session",
+		Value:    id,
+		Path:     "/",
+		MaxAge:   int(sessionTTL.Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func readJSON(r *http.Request, dst any, limit int64) error {
+	defer r.Body.Close()
+	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+func listen(addr string, port int) (net.Listener, int, error) {
+	try := func(p int) (net.Listener, error) {
+		return net.Listen("tcp", net.JoinHostPort(addr, strconv.Itoa(p)))
+	}
+	if port != 0 {
+		ln, err := try(port)
+		if err != nil {
+			return nil, 0, err
+		}
+		return ln, ln.Addr().(*net.TCPAddr).Port, nil
+	}
+	for i := 0; i < 40; i++ {
+		var b [2]byte
+		if _, err := cryptoRand(b[:]); err != nil {
+			return nil, 0, err
+		}
+		p := 20000 + int(binaryUint16(b))%45000
+		ln, err := try(p)
+		if err == nil {
+			return ln, ln.Addr().(*net.TCPAddr).Port, nil
+		}
+	}
+	return nil, 0, errors.New("پورت آزاد پیدا نشد")
+}
+
+func binaryUint16(b [2]byte) uint16 {
+	return uint16(b[0])<<8 | uint16(b[1])
+}
+
+func printBanner(addr string, port int, password string, showPassword bool) {
+	fmt.Println()
+	fmt.Println("  پنل تست اسپوف آماده است")
+	fmt.Println("  ────────────────────────────────────────")
+	if addr == "0.0.0.0" || addr == "" {
+		for _, ip := range bannerAddrs() {
+			fmt.Printf("  آدرس ورود:   http://%s/\n", net.JoinHostPort(ip, fmt.Sprint(port)))
+		}
+		fmt.Printf("  آدرس محلی:   http://127.0.0.1:%d/\n", port)
+	} else {
+		fmt.Printf("  آدرس ورود:   http://%s/\n", net.JoinHostPort(addr, fmt.Sprint(port)))
+	}
+	fmt.Println("  نام کاربری:  admin")
+	if showPassword {
+		fmt.Printf("  رمز عبور:    %s\n", password)
+		fmt.Println("  این رمز فقط همین یک‌بار نشان داده می‌شود.")
+	} else {
+		fmt.Println("  رمز عبور:    همان رمز قبلی")
+		fmt.Println("  رمز جدید:    go run . --reset-password")
+	}
+	fmt.Println("  ────────────────────────────────────────")
+	fmt.Println("  تست واقعی بسته فقط روی لینوکس با sudo اجرا می‌شود.")
+	fmt.Println()
+}
+
+func bannerAddrs() []string {
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return []string{"127.0.0.1"}
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
+			}
+			out = append(out, ipnet.IP.String())
+		}
+	}
+	if len(out) == 0 {
+		return []string{"127.0.0.1"}
+	}
+	return out
+}
