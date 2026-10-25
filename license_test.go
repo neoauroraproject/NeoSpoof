@@ -135,6 +135,44 @@ func TestLicenseExpiryAndRollback(t *testing.T) {
 	}
 }
 
+func TestOfflineTrial(t *testing.T) {
+	dir := t.TempDir()
+	// A fresh install (no license, no network) must be active on the trial.
+	m, err := openLicense(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := m.status()
+	if !st.Active || !st.Trial || st.Activated {
+		t.Fatalf("fresh install should be in trial: %#v", st)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "trial.bin")); err != nil {
+		t.Fatalf("trial record not written: %v", err)
+	}
+	// Reopening keeps the same trial window (does not reset it).
+	start := m.trial.Start
+	m2, _ := openLicense(dir, "")
+	if m2.trial == nil || m2.trial.Start != start {
+		t.Fatal("trial window reset on reopen")
+	}
+
+	// An expired trial is inactive.
+	m2.mu.Lock()
+	m2.trial = &trialState{Start: time.Now().Add(-48 * time.Hour).Unix(), Seen: time.Now().Add(-48 * time.Hour).Unix()}
+	m2.mu.Unlock()
+	if m2.status().Active {
+		t.Fatal("expired trial must be inactive")
+	}
+
+	// A tampered trial record does not decrypt.
+	if err := os.WriteFile(filepath.Join(dir, "trial.bin"), []byte("garbage-not-encrypted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openTrial([]byte("garbage-not-encrypted")); err == nil {
+		t.Fatal("tampered trial record must fail to open")
+	}
+}
+
 func TestLicenseEndpointsDecode(t *testing.T) {
 	eps := licenseEndpoints()
 	if len(eps) != 4 || eps[0] != "license.hmray.pro" || eps[3] != "license.hossein-m466.workers.dev" {

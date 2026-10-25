@@ -271,6 +271,20 @@ func (m *tunnelManager) logs(id int) ([]string, error) {
 	return out, nil
 }
 
+// runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so
+// the license check can be routed out through the spoof tunnel itself.
+func (m *tunnelManager) runningSocksAddrs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, in := range m.inst {
+		if in.status == "running" && in.conf.SocksPort > 0 {
+			out = append(out, "127.0.0.1:"+strconv.Itoa(in.conf.SocksPort))
+		}
+	}
+	return out
+}
+
 // stopAll kills every running core process (called on shutdown).
 func (m *tunnelManager) stopAll() {
 	m.mu.Lock()

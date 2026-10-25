@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -38,6 +41,10 @@ import (
 const (
 	licenseCheckEvery = 24 * time.Hour
 	licenseGrace      = 48 * time.Hour // server sets expires_at = issued_at + this
+	// A fresh install runs for this long with no license, so a server that has no
+	// international access yet (e.g. inside Iran) can bring up the spoof tunnel
+	// first and only then validate — the check can even go through that tunnel.
+	trialDuration = 24 * time.Hour
 )
 
 // licPubB64 is the Ed25519 public key that verifies license tokens. The matching
@@ -100,25 +107,88 @@ type licenseState struct {
 }
 
 type licenseStatus struct {
-	Activated bool   `json:"activated"`
-	Active    bool   `json:"active"`
-	Plan      string `json:"plan,omitempty"`
-	BoundIP   string `json:"bound_ip,omitempty"`
-	ExpiresAt int64  `json:"expires_at,omitempty"`
-	LastCheck int64  `json:"last_check,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	Activated    bool   `json:"activated"`
+	Active       bool   `json:"active"`
+	Plan         string `json:"plan,omitempty"`
+	BoundIP      string `json:"bound_ip,omitempty"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	LastCheck    int64  `json:"last_check,omitempty"`
+	Trial        bool   `json:"trial"`
+	TrialExpires int64  `json:"trial_expires,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// trialState is the encrypted-at-rest record of the offline trial window.
+type trialState struct {
+	Start int64 `json:"start"`
+	Seen  int64 `json:"seen"`
 }
 
 type licenseManager struct {
 	path      string
+	trialPath string
 	pub       ed25519.PublicKey
 	endpoints []string
 	scheme    string // "https" in production; tests override to "http"
 	proxy     string // optional SOCKS5 host:port for the fallback route
 
+	// proxyFn yields extra SOCKS5 proxies to try (e.g. the panel's own running
+	// spoof tunnels), so a license check can go out through the tunnel itself.
+	proxyFn func() []string
+
 	mu     sync.Mutex
 	st     licenseState
 	claims *tokenClaims
+	trial  *trialState
+}
+
+// trialKey derives the AES key that encrypts the offline trial record at rest.
+func trialKey() []byte {
+	h := sha256.Sum256(append([]byte("neospoof-trial-v1-"), obfKey...))
+	return h[:]
+}
+
+func sealTrial(ts trialState) ([]byte, error) {
+	pt, err := json.Marshal(ts)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(trialKey())
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, pt, nil), nil
+}
+
+func openTrial(b []byte) (trialState, error) {
+	block, err := aes.NewCipher(trialKey())
+	if err != nil {
+		return trialState{}, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return trialState{}, err
+	}
+	if len(b) < gcm.NonceSize() {
+		return trialState{}, errors.New("trial record too short")
+	}
+	pt, err := gcm.Open(nil, b[:gcm.NonceSize()], b[gcm.NonceSize():], nil)
+	if err != nil {
+		return trialState{}, err // tampered or wrong key
+	}
+	var ts trialState
+	if err := json.Unmarshal(pt, &ts); err != nil {
+		return trialState{}, err
+	}
+	return ts, nil
 }
 
 func openLicense(dir, proxy string) (*licenseManager, error) {
@@ -128,6 +198,7 @@ func openLicense(dir, proxy string) (*licenseManager, error) {
 	}
 	m := &licenseManager{
 		path:      filepath.Join(dir, "license.json"),
+		trialPath: filepath.Join(dir, "trial.bin"),
 		pub:       ed25519.PublicKey(pub),
 		endpoints: licenseEndpoints(),
 		scheme:    "https",
@@ -145,7 +216,48 @@ func openLicense(dir, proxy string) (*licenseManager, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	// Load (or start) the offline trial so a fresh, offline install still runs.
+	if b, err := os.ReadFile(m.trialPath); err == nil {
+		if ts, err := openTrial(b); err == nil {
+			m.trial = &ts
+		}
+	}
+	if m.claims == nil && m.trial == nil {
+		m.startTrialLocked()
+	}
 	return m, nil
+}
+
+// startTrialLocked begins the offline trial window now and persists it encrypted.
+func (m *licenseManager) startTrialLocked() {
+	now := time.Now().Unix()
+	ts := trialState{Start: now, Seen: now}
+	if b, err := sealTrial(ts); err == nil {
+		tmp := m.trialPath + ".tmp"
+		if os.WriteFile(tmp, b, 0600) == nil {
+			_ = os.Rename(tmp, m.trialPath)
+		}
+	}
+	m.trial = &ts
+}
+
+// trialActiveLocked reports whether the offline trial window is still open, and
+// advances its monotonic high-water mark so clock rollback cannot extend it.
+func (m *licenseManager) trialActiveLocked() bool {
+	if m.trial == nil {
+		return false
+	}
+	now := m.effectiveNow()
+	if now > m.trial.Seen {
+		m.trial.Seen = now
+		if b, err := sealTrial(*m.trial); err == nil {
+			tmp := m.trialPath + ".tmp"
+			if os.WriteFile(tmp, b, 0600) == nil {
+				_ = os.Rename(tmp, m.trialPath)
+			}
+		}
+	}
+	return now < m.trial.Start+int64(trialDuration.Seconds())
 }
 
 // verify checks the Ed25519 signature over the payload and returns the claims.
@@ -173,7 +285,10 @@ func (m *licenseManager) verify(payloadB64, sigB64 string) (*tokenClaims, error)
 func (m *licenseManager) effectiveNow() int64 {
 	now := time.Now().Unix()
 	if m.st.SeenTime > now {
-		return m.st.SeenTime
+		now = m.st.SeenTime
+	}
+	if m.trial != nil && m.trial.Seen > now {
+		now = m.trial.Seen
 	}
 	return now
 }
@@ -186,18 +301,30 @@ func (m *licenseManager) status() licenseStatus {
 
 func (m *licenseManager) statusLocked() licenseStatus {
 	s := licenseStatus{LastCheck: m.st.LastOK}
-	if m.claims == nil {
-		s.Reason = "برای استفاده، لایسنس را فعال کنید"
+	if m.claims != nil {
+		s.Activated = true
+		s.Plan = m.claims.Plan
+		s.BoundIP = m.claims.BoundIP
+		s.ExpiresAt = m.claims.ExpiresAt
+		if m.effectiveNow() < m.claims.ExpiresAt {
+			s.Active = true
+			return s
+		}
+		s.Reason = "لایسنس منقضی شد و اتصال به سرور لایسنس برقرار نشد"
+	}
+	// No valid license — fall back to the offline trial window.
+	if m.trialActiveLocked() {
+		s.Active = true
+		s.Trial = true
+		s.TrialExpires = m.trial.Start + int64(trialDuration.Seconds())
+		if !s.Activated {
+			left := s.TrialExpires - m.effectiveNow()
+			s.Reason = "نسخه آزمایشی — حدود " + strconv.Itoa(int(left/3600)) + " ساعت باقی مانده"
+		}
 		return s
 	}
-	s.Activated = true
-	s.Plan = m.claims.Plan
-	s.BoundIP = m.claims.BoundIP
-	s.ExpiresAt = m.claims.ExpiresAt
-	if m.effectiveNow() < m.claims.ExpiresAt {
-		s.Active = true
-	} else {
-		s.Reason = "لایسنس منقضی شد و اتصال به سرور لایسنس برقرار نشد"
+	if !s.Activated {
+		s.Reason = "برای ادامه، لایسنس را فعال کنید"
 	}
 	return s
 }
@@ -326,6 +453,19 @@ func (m *licenseManager) parse(resp *http.Response, nonce string) (*tokenClaims,
 	return claims, out.YourIP, nil
 }
 
+// proxyList gathers the SOCKS5 proxies to try: the configured one plus any the
+// panel's own running spoof tunnels provide.
+func (m *licenseManager) proxyList() []string {
+	var list []string
+	if m.proxy != "" {
+		list = append(list, m.proxy)
+	}
+	if m.proxyFn != nil {
+		list = append(list, m.proxyFn()...)
+	}
+	return list
+}
+
 func (m *licenseManager) post(host string, body []byte) (*http.Response, error) {
 	url := m.scheme + "://" + host + "/v1/license"
 	direct := &http.Client{Timeout: 12 * time.Second}
@@ -333,15 +473,19 @@ func (m *licenseManager) post(host string, body []byte) (*http.Response, error) 
 	if err == nil {
 		return resp, nil
 	}
-	if m.proxy == "" {
-		return nil, err
+	// Fallback: route the check through the SOCKS5 proxies (the spoof tunnel the
+	// system builds), so a server with no direct international access can still
+	// validate once its tunnel is up.
+	for _, px := range m.proxyList() {
+		if px == "" {
+			continue
+		}
+		c := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{DialContext: socksDialer(px)}}
+		if r, e := c.Post(url, "application/json", bytes.NewReader(body)); e == nil {
+			return r, nil
+		}
 	}
-	// Fallback: route the check through the SOCKS5 proxy the system builds.
-	proxied := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: &http.Transport{DialContext: socksDialer(m.proxy)},
-	}
-	return proxied.Post(url, "application/json", bytes.NewReader(body))
+	return nil, err
 }
 
 func (m *licenseManager) loop(ctx context.Context) {

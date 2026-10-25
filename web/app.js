@@ -101,6 +101,8 @@ function showLicense(lic) {
   const st = $("license-status");
   if (lic && lic.reason) { st.hidden = false; st.textContent = lic.reason; }
   else { st.hidden = true; }
+  // During the trial the operator can keep using it without activating yet.
+  $("license-later").hidden = !(lic && lic.trial);
 }
 // gate decides which screen to show once we know the license state.
 function gate(me) {
@@ -191,6 +193,8 @@ $("license-logout").addEventListener("click", async () => {
   await api("/api/logout", { method: "POST", body: {} }).catch(() => {});
   showLogin();
 });
+$("license-later").addEventListener("click", () => { showApp(); refresh(); });
+$("trial-pill").addEventListener("click", () => showLicense(lastLicense));
 
 /* ===== tabs ===== */
 const tabs = Array.from(document.querySelectorAll('.nav [role="tab"]'));
@@ -453,12 +457,22 @@ $("password-form").addEventListener("submit", async (ev) => {
 });
 
 /* ===== me / capabilities ===== */
+let lastLicense = null;
 // applyMe renders everything derived from /api/me (no fetch of its own).
 function applyMe(me) {
   state.rawReady = !!me.raw_ready;
   if (me.version) { $("ver").textContent = "v" + me.version; $("ver").hidden = false; }
   $("set-listen").value = me.listen_seconds;
   $("set-pps").value = me.packets_per_sec;
+  lastLicense = me.license || null;
+  const tp = $("trial-pill");
+  if (lastLicense && lastLicense.trial) {
+    const hrs = Math.max(0, Math.round((lastLicense.trial_expires - Date.now() / 1000) / 3600));
+    tp.hidden = false;
+    tp.textContent = "آزمایشی · " + fa(hrs) + " ساعت";
+  } else {
+    tp.hidden = true;
+  }
   renderServerInfo(me);
   renderCapability(me);
 }
@@ -494,12 +508,14 @@ function renderServerInfo(me) {
   add("نرخ ارسال", fa(me.packets_per_sec) + " بسته/ثانیه");
   const lic = me.license || {};
   const ldt = document.createElement("dt"); ldt.textContent = "لایسنس";
-  const ldd = document.createElement("dd"); ldd.textContent = lic.active ? "فعال" : "غیرفعال";
-  ldd.style.color = lic.active ? "var(--ok)" : "var(--bad)";
+  const ldd = document.createElement("dd");
+  ldd.textContent = lic.activated ? (lic.active ? "فعال" : "منقضی") : (lic.trial ? "نسخه آزمایشی" : "غیرفعال");
+  ldd.style.color = (lic.activated && lic.active) ? "var(--ok)" : (lic.trial ? "var(--warn)" : "var(--bad)");
   dl.append(ldt, ldd);
   if (lic.plan) add("پلن", lic.plan);
   if (lic.bound_ip) add("قفل‌شده روی", lic.bound_ip);
   if (lic.expires_at) add("اعتبار تا", new Date(lic.expires_at * 1000).toLocaleString("fa-IR"));
+  if (lic.trial && lic.trial_expires) add("پایان آزمایشی", new Date(lic.trial_expires * 1000).toLocaleString("fa-IR"));
 }
 
 /* ===== polling ===== */

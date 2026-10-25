@@ -60,6 +60,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Let the license check fall back through the panel's own running tunnels.
+	lic.proxyFn = mgr.runningSocksAddrs
 	ln, boundPort, err := listen(*addr, *port)
 	if err != nil {
 		log.Fatal(err)
