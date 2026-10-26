@@ -23,7 +23,8 @@ type tunnelConf struct {
 	Name       string `json:"name"`
 	SocksPort  int    `json:"socks_port"`
 	PeerRealIP string `json:"peer_real_ip"`
-	TOML       string `json:"toml"`
+	TOML       string `json:"toml"`        // client config the local core runs
+	ServerTOML string `json:"server_toml"` // matched config for the exit server
 }
 
 type tunnelInstance struct {
@@ -122,7 +123,7 @@ func (m *tunnelManager) list() []tunnelDTO {
 	return out
 }
 
-func (m *tunnelManager) create(name, peerRealIP string, socksPort int, toml string) (tunnelDTO, error) {
+func (m *tunnelManager) create(name, peerRealIP string, socksPort int, toml, serverTOML string) (tunnelDTO, error) {
 	if name == "" {
 		return tunnelDTO{}, errInput("نام لوکیشن لازم است")
 	}
@@ -137,7 +138,7 @@ func (m *tunnelManager) create(name, peerRealIP string, socksPort int, toml stri
 		}
 	}
 	m.seq++
-	c := tunnelConf{ID: m.seq, Name: name, SocksPort: socksPort, PeerRealIP: peerRealIP, TOML: toml}
+	c := tunnelConf{ID: m.seq, Name: name, SocksPort: socksPort, PeerRealIP: peerRealIP, TOML: toml, ServerTOML: serverTOML}
 	m.inst[c.ID] = &tunnelInstance{conf: c, status: "stopped"}
 	if err := m.saveLocked(); err != nil {
 		delete(m.inst, c.ID)
@@ -269,6 +270,18 @@ func (m *tunnelManager) logs(id int) ([]string, error) {
 	out := make([]string, len(in.logs))
 	copy(out, in.logs)
 	return out, nil
+}
+
+// serverConfig returns the stored config of one tunnel, so the panel can show
+// the matched exit-server setup command on demand.
+func (m *tunnelManager) serverConfig(id int) (tunnelConf, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in := m.inst[id]
+	if in == nil {
+		return tunnelConf{}, errInput("لوکیشن پیدا نشد")
+	}
+	return in.conf, nil
 }
 
 // runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so

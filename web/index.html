@@ -192,6 +192,21 @@
           <div class="actions"><button id="tn-create" class="cta" type="button">افزودن تانل</button></div>
         </div>
         <section id="tn-list" class="card stack" aria-live="polite"></section>
+        <section id="tn-server-card" class="card stack" hidden>
+          <div class="row spread">
+            <h3>دستور سرور خارج — <span id="tn-server-name" class="ltr"></span></h3>
+            <button id="tn-server-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button>
+          </div>
+          <p class="muted lead">این دستور را روی <b>سرور خارج</b> اجرا کنید. کانفیگ را با همان کلید و پورت این تانل ذخیره و سرور را بالا می‌آورد. باینری <span class="ltr">server</span> باید از قبل آنجا ساخته شده باشد (<span class="ltr">cargo build --release</span>).</p>
+          <label>دستور آماده
+            <textarea id="tn-server-cmd" class="ltr" readonly rows="9"></textarea>
+          </label>
+          <textarea id="tn-server-toml" hidden></textarea>
+          <div class="actions">
+            <button id="tn-server-cmd-copy" class="primary" type="button">کپی دستور</button>
+            <button id="tn-server-toml-dl" class="ghost" type="button">دانلود server.toml</button>
+          </div>
+        </section>
         <section id="tn-logs-card" class="card stack" hidden>
           <div class="row spread"><h3>لاگ لوکیشن</h3><button id="tn-logs-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button></div>
           <pre id="tn-logs" class="logbox ltr"></pre>

@@ -22,7 +22,7 @@ func TestManagerSpawnRealProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dto, err := m.create("Loc", "203.0.113.1", 1080, "dummy-toml")
+	dto, err := m.create("Loc", "203.0.113.1", 1080, "dummy-toml", "dummy-server-toml")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -723,6 +723,7 @@ function stopTunnels() {
   clearInterval(tn.listTimer); tn.listTimer = 0;
   clearInterval(tn.logsTimer); tn.logsTimer = 0; tn.logsId = 0;
   $("tn-logs-card").hidden = true;
+  $("tn-server-card").hidden = true;
 }
 async function loadTunnels() {
   if (document.hidden) return;
@@ -755,10 +756,11 @@ function renderTunnels(list) {
     const toggle = document.createElement("button");
     if (t.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => tnAction("stop", t.id); }
     else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => tnAction("start", t.id); }
+    const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
     const logsBtn = document.createElement("button"); logsBtn.className = "ghost"; logsBtn.textContent = "لاگ"; logsBtn.onclick = () => openTnLogs(t.id);
     const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
     del.onclick = () => { if (confirm("این تانل حذف شود؟")) tnAction("delete", t.id); };
-    acts.append(toggle, logsBtn, del);
+    acts.append(toggle, srvBtn, logsBtn, del);
 
     row.append(head, meta, acts);
     box.appendChild(row);
@@ -773,18 +775,38 @@ $("tn-create").addEventListener("click", async () => {
   const ips = $("tn-ips").value.split(/[\s,;]+/).filter(Boolean);
   const btn = $("tn-create"); btn.disabled = true;
   try {
-    await api("/api/tunnels", { method: "POST", body: {
+    const res = await api("/api/tunnels", { method: "POST", body: {
       name: $("tn-name").value.trim(),
       peer_real_ip: $("tn-peer").value.trim(),
       socks_port: parseInt($("tn-socks").value, 10) || 0,
       spoof_ips: ips
     }});
     $("tn-name").value = ""; $("tn-ips").value = "";
-    toast("تانل ساخته شد", "ok");
+    toast("تانل ساخته شد — دستور سرور خارج آماده است", "ok");
+    if (res && res.command) {
+      showTnServer({ name: (res.tunnel && res.tunnel.name) || "", command: res.command, server_toml: res.server_toml });
+    }
     loadTunnels();
   } catch (e) { setError("tn-error", e.message); }
   finally { btn.disabled = false; }
 });
+async function openTnServer(id) {
+  try { showTnServer(await api("/api/tunnels/server?id=" + id)); }
+  catch (e) { toast(e.message, "err"); }
+}
+function showTnServer(d) {
+  $("tn-server-name").textContent = d.name || "";
+  $("tn-server-cmd").value = d.command || "";
+  $("tn-server-toml").value = d.server_toml || "";
+  $("tn-server-card").hidden = false;
+  $("tn-server-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("tn-server-close").addEventListener("click", () => { $("tn-server-card").hidden = true; });
+$("tn-server-cmd-copy").addEventListener("click", async () => {
+  const ok = await copyText($("tn-server-cmd").value);
+  toast(ok ? "دستور کپی شد" : "کپی نشد", ok ? "ok" : "err");
+});
+$("tn-server-toml-dl").addEventListener("click", () => { downloadText($("tn-server-toml").value, "server.toml"); });
 function openTnLogs(id) {
   tn.logsId = id;
   $("tn-logs-card").hidden = false;

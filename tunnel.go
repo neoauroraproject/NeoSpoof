@@ -98,13 +98,30 @@ func buildTunnelConfig(passing []string, peerReal, localReal string) (clientTOML
 	return fillTemplate(clientTmpl, kv), fillTemplate(serverTmpl, kv), meta, nil
 }
 
-// renderCandyClient builds a Candy-Spoof client.toml for one tunnel/location:
-// this machine is the client, serverRealIP is the remote endpoint, pool is the
-// spoofed source IPs (the ones that passed the test), and socksPort is this
-// tunnel's own local SOCKS5 port.
-func renderCandyClient(serverRealIP string, pool []string, socksPort int) (string, error) {
+// candyPair is a matched Candy-Spoof config pair for one tunnel/location: the
+// panel runs ClientTOML locally (exposing SocksPort), and the exit server runs
+// ServerTOML. Both halves share psk/data_port/icmp_id, so the pair works
+// together with no further editing.
+type candyPair struct {
+	ClientTOML string
+	ServerTOML string
+	PeerReal   string // exit server's real IP
+	LocalReal  string // this machine's real IP
+	Primary    string
+	Pool       []string
+	DataPort   int
+	ICMPID     int
+	PSK        string
+	SocksPort  int
+}
+
+// renderCandyPair builds a matched client/server pair for one tunnel/location:
+// this machine is the client, serverRealIP is the exit server that runs the
+// server side, pool is the spoofed source IPs (the ones that passed the test),
+// and socksPort is this tunnel's own local SOCKS5 port.
+func renderCandyPair(serverRealIP string, pool []string, socksPort int) (candyPair, error) {
 	if len(pool) == 0 {
-		return "", errInput("لیست آی‌پی اسپوف خالی است")
+		return candyPair{}, errInput("لیست آی‌پی اسپوف خالی است")
 	}
 	if serverRealIP == "" {
 		serverRealIP = "0.0.0.0"
@@ -117,15 +134,15 @@ func renderCandyClient(serverRealIP string, pool []string, socksPort int) (strin
 	}
 	psk, err := randHex(32)
 	if err != nil {
-		return "", err
+		return candyPair{}, err
 	}
 	port, err := randRange(20000, 60000)
 	if err != nil {
-		return "", err
+		return candyPair{}, err
 	}
 	id, err := randRange(1, 0xffff)
 	if err != nil {
-		return "", err
+		return candyPair{}, err
 	}
 	kv := map[string]string{
 		"client_real": clientReal,
@@ -137,7 +154,35 @@ func renderCandyClient(serverRealIP string, pool []string, socksPort int) (strin
 		"psk":         psk,
 		"socks":       strconv.Itoa(socksPort),
 	}
-	return fillTemplate(clientTmpl, kv), nil
+	return candyPair{
+		ClientTOML: fillTemplate(clientTmpl, kv),
+		ServerTOML: fillTemplate(serverTmpl, kv),
+		PeerReal:   serverRealIP,
+		LocalReal:  clientReal,
+		Primary:    pool[0],
+		Pool:       pool,
+		DataPort:   port,
+		ICMPID:     id,
+		PSK:        psk,
+		SocksPort:  socksPort,
+	}, nil
+}
+
+// serverSetupCommand is the single copy-paste block the operator runs on the
+// exit server: it saves the matching server config, then launches the
+// Candy-Spoof server core. The server binary must already be built and present
+// (cargo build --release) next to where the command runs.
+func serverSetupCommand(serverTOML string) string {
+	var b strings.Builder
+	b.WriteString("# روی سرور خارج اجرا کنید (باینری server باید کنار دستور باشد).\n")
+	b.WriteString("mkdir -p ~/candy-spoof && cat > ~/candy-spoof/server.toml <<'CANDYEOF'\n")
+	b.WriteString(serverTOML)
+	if !strings.HasSuffix(serverTOML, "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("CANDYEOF\n")
+	b.WriteString("sudo ./server --config ~/candy-spoof/server.toml")
+	return b.String()
 }
 
 func fillTemplate(tmpl string, kv map[string]string) string {

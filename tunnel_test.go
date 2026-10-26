@@ -44,3 +44,43 @@ func TestBuildTunnelConfig(t *testing.T) {
 		t.Fatal("expected error for empty passing set")
 	}
 }
+
+func TestRenderCandyPair(t *testing.T) {
+	pool := []string{"8.8.8.8", "1.1.1.1"}
+	pair, err := renderCandyPair("203.0.113.7", pool, 1081)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The exit server's real IP is the client's peer, and vice versa.
+	if !strings.Contains(pair.ClientTOML, `peer_real_ip    = "203.0.113.7"`) {
+		t.Fatal("client peer_real_ip missing")
+	}
+	if !strings.Contains(pair.ServerTOML, `real_ip         = "203.0.113.7"`) {
+		t.Fatal("server real_ip missing")
+	}
+	// The client's SOCKS port is honored.
+	if !strings.Contains(pair.ClientTOML, "socks5_port     = 1081") {
+		t.Fatal("client socks port missing")
+	}
+	// Both halves must share the same secret and ports so the pair works as-is.
+	psk := `pre_shared_key  = "` + pair.PSK + `"`
+	if !strings.Contains(pair.ClientTOML, psk) || !strings.Contains(pair.ServerTOML, psk) {
+		t.Fatal("psk not shared across the pair")
+	}
+	if strings.Contains(pair.ClientTOML, "{{") || strings.Contains(pair.ServerTOML, "{{") {
+		t.Fatal("unfilled template marker remains")
+	}
+	// Empty pool is rejected.
+	if _, err := renderCandyPair("203.0.113.7", nil, 1080); err == nil {
+		t.Fatal("expected error for empty pool")
+	}
+
+	// The exit-server command carries the config and ends by launching the core.
+	cmd := serverSetupCommand(pair.ServerTOML)
+	if !strings.Contains(cmd, "CANDYEOF") || !strings.Contains(cmd, pair.PSK) {
+		t.Fatal("setup command missing config body")
+	}
+	if !strings.Contains(cmd, "server --config") {
+		t.Fatal("setup command does not launch the server")
+	}
+}

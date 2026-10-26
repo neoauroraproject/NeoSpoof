@@ -36,12 +36,12 @@ type server struct {
 }
 
 func main() {
-	dataDir := flag.String("data", "data", "پوشه ذخیره رمز و تنظیمات")
-	reset := flag.Bool("reset-password", false, "ساخت رمز تصادفی جدید")
-	addr := flag.String("addr", "0.0.0.0", "نشانی شبکه برای گوش دادن")
-	port := flag.Int("port", 0, "پورت ثابت (۰ یعنی پورت تصادفی)")
-	licenseProxy := flag.String("license-proxy", "", "پروکسی SOCKS5 برای چک لایسنس (host:port)")
-	corePath := flag.String("core", "client", "مسیر باینری هسته‌ی اسپوف که هر تانل اجرا می‌شود")
+	dataDir := flag.String("data", "data", "data directory (password, settings, license, tunnels)")
+	reset := flag.Bool("reset-password", false, "generate a new random password")
+	addr := flag.String("addr", "0.0.0.0", "listen address")
+	port := flag.Int("port", 0, "fixed port (0 = random)")
+	licenseProxy := flag.String("license-proxy", "", "SOCKS5 proxy for license checks (host:port)")
+	corePath := flag.String("core", "client", "path to the spoof core binary each tunnel runs")
 	flag.Parse()
 
 	auth, password, created, err := openAuth(*dataDir, *reset)
@@ -86,6 +86,7 @@ func main() {
 	mux.HandleFunc("/api/tunnels/stop", s.guard(s.handleTunnelStop))
 	mux.HandleFunc("/api/tunnels/delete", s.guard(s.handleTunnelDelete))
 	mux.HandleFunc("/api/tunnels/logs", s.guard(s.handleTunnelLogs))
+	mux.HandleFunc("/api/tunnels/server", s.guard(s.handleTunnelServer))
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -387,17 +388,23 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "آی‌پی اسپوف لازم است؛ اول تست کنید یا دستی وارد کنید")
 			return
 		}
-		toml, err := renderCandyClient(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
+		pair, err := renderCandyPair(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		dto, err := s.manager.create(strings.TrimSpace(body.Name), strings.TrimSpace(body.PeerRealIP), body.SocksPort, toml)
+		dto, err := s.manager.create(strings.TrimSpace(body.Name), strings.TrimSpace(body.PeerRealIP), body.SocksPort, pair.ClientTOML, pair.ServerTOML)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, dto)
+		// Hand back the matched exit-server config and a copy-paste command so
+		// the operator can bring the far side up with the same key and ports.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"tunnel":      dto,
+			"server_toml": pair.ServerTOML,
+			"command":     serverSetupCommand(pair.ServerTOML),
+		})
 	default:
 		http.Error(w, "method", http.StatusMethodNotAllowed)
 	}
@@ -478,6 +485,36 @@ func (s *server) handleTunnelLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"logs": lines})
+}
+
+// handleTunnelServer returns the matched exit-server config and a ready-to-run
+// setup command for one tunnel, so the operator can bring the far side up with
+// the same key and ports at any time after creating the tunnel.
+func (s *server) handleTunnelServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLicense(w) {
+		return
+	}
+	id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+	conf, err := s.manager.serverConfig(id)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if conf.ServerTOML == "" {
+		writeErr(w, http.StatusBadRequest, "این تانل پیش از افزوده‌شدن کانفیگ سرور ساخته شده؛ یک تانل تازه بسازید")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":         conf.Name,
+		"peer_real_ip": conf.PeerRealIP,
+		"socks_port":   conf.SocksPort,
+		"server_toml":  conf.ServerTOML,
+		"command":      serverSetupCommand(conf.ServerTOML),
+	})
 }
 
 // requireLicense blocks operational endpoints until the license is active.
