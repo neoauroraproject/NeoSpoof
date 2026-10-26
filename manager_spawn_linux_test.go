@@ -18,7 +18,7 @@ func TestManagerSpawnRealProcess(t *testing.T) {
 	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	m, err := openManager(dir, stub)
+	m, err := openManager(dir, stub, stub)
 	if err != nil {
 		t.Fatal(err)
 	}

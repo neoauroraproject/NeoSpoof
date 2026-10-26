@@ -84,3 +84,39 @@ func TestRenderCandyPair(t *testing.T) {
 		t.Fatal("setup command does not launch the server")
 	}
 }
+
+func TestServerTOMLHelpers(t *testing.T) {
+	cmd := "# run on the exit server\nmkdir -p ~/x && cat > ~/x/server.toml <<'CANDYEOF'\n" +
+		"real_ip         = \"64.118.157.48\"\npeer_real_ip    = \"191.40.4.14\"\ndata_port       = 27161\n" +
+		"pre_shared_key  = \"abc\"\nsocks5_port     = 1080\nCANDYEOF\nsudo ./server --config ~/x/server.toml"
+	body := extractServerTOML(cmd)
+	if strings.Contains(body, "CANDYEOF") || strings.Contains(body, "mkdir") {
+		t.Fatalf("heredoc not stripped: %q", body)
+	}
+	// Body must start at the first config line, not a stray heredoc quote.
+	if !strings.HasPrefix(strings.TrimSpace(body), "real_ip") {
+		t.Fatalf("body has leading junk: %q", body)
+	}
+	// Whole-word key match: real_ip and peer_real_ip must not collide.
+	if tomlValue(body, "peer_real_ip") != "191.40.4.14" {
+		t.Fatalf("peer_real_ip = %q", tomlValue(body, "peer_real_ip"))
+	}
+	if tomlValue(body, "real_ip") != "64.118.157.48" {
+		t.Fatalf("real_ip = %q", tomlValue(body, "real_ip"))
+	}
+	if tomlValue(body, "socks5_port") != "1080" {
+		t.Fatalf("socks5_port = %q", tomlValue(body, "socks5_port"))
+	}
+	// Rewriting real_ip must not touch peer_real_ip.
+	out := setTOMLString(body, "real_ip", "10.0.0.9")
+	if tomlValue(out, "real_ip") != "10.0.0.9" {
+		t.Fatal("real_ip not rewritten")
+	}
+	if tomlValue(out, "peer_real_ip") != "191.40.4.14" {
+		t.Fatal("peer_real_ip got clobbered")
+	}
+	// Raw TOML (no heredoc) passes through.
+	if got := extractServerTOML("real_ip = \"1.2.3.4\""); got != `real_ip = "1.2.3.4"` {
+		t.Fatalf("raw passthrough: %q", got)
+	}
+}

@@ -205,13 +205,27 @@
           <p id="tn-error" class="alert" role="alert" hidden></p>
           <div class="actions"><button id="tn-create" class="cta" type="button">افزودن تانل</button></div>
         </div>
+
+        <div class="card stack">
+          <h2>افزودن سرور از کانفیگ (روی سرور مقصد)</h2>
+          <p class="muted lead">اگر این پنل روی <b>سرور مقصد</b> است: دستور یا متن <span class="ltr">server.toml</span> را که سمت مبدأ ساخته شد همین‌جا بگذار و ذخیره کن. پنل آی‌پی این سرور را خودش درست می‌کند و هستهٔ <span class="ltr">server</span> را اجرا می‌کند — بدون رفتن به ترمینال. پورت و کلید از همان کانفیگ نگه داشته می‌شوند.</p>
+          <label>نام
+            <input id="imp-name" type="text" placeholder="مثلاً سرور آلمان">
+          </label>
+          <label>کانفیگ سرور یا دستور کامل
+            <textarea id="imp-config" class="ltr" spellcheck="false" placeholder="کل دستور «دستور سرور» یا متن server.toml را این‌جا بچسبان"></textarea>
+          </label>
+          <p id="imp-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button id="imp-save" class="cta" type="button">ذخیره و اجرا</button></div>
+        </div>
+
         <section id="tn-list" class="card stack" aria-live="polite"></section>
         <section id="tn-server-card" class="card stack" hidden>
           <div class="row spread">
             <h3>دستور سرور خارج — <span id="tn-server-name" class="ltr"></span></h3>
             <button id="tn-server-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button>
           </div>
-          <p class="muted lead">این دستور را روی <b>سرور خارج</b> اجرا کنید. کانفیگ را با همان کلید و پورت این تانل ذخیره و سرور را بالا می‌آورد. باینری <span class="ltr">server</span> باید از قبل آنجا ساخته شده باشد (<span class="ltr">cargo build --release</span>).</p>
+          <p class="muted lead">دو راه: ❶ اگر روی سرور مقصد هم همین پنل هست، این متن را همان‌جا در بخش «افزودن سرور از کانفیگ» بگذار و ذخیره کن (بدون ترمینال). ❷ یا این دستور را روی <b>سرور مقصد</b> در ترمینال اجرا کن؛ کانفیگ را با همان کلید و پورت ذخیره و سرور را بالا می‌آورد (باینری <span class="ltr">server</span> باید آنجا باشد).</p>
           <label>دستور آماده
             <textarea id="tn-server-cmd" class="ltr" readonly rows="9"></textarea>
           </label>

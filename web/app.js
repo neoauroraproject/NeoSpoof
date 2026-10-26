@@ -724,33 +724,40 @@ function renderTunnels(list) {
     badge.textContent = TN_STATUS[t.status] || t.status;
     head.append(title, badge);
 
+    const isServer = t.role === "server";
+
     const meta = document.createElement("div"); meta.className = "meta";
     const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
-    meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
+    if (isServer) meta.append(m("نقش", "سرور (اکسیت)"), m("کلاینت", t.peer_real_ip || "—"));
+    else meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
     if (t.status === "running" && t.uptime) meta.append(m("آپ‌تایم", fa(t.uptime) + "s"));
     if (t.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = t.error; meta.append(e); }
-    const chk = tn.checks[t.id];
-    if (chk) {
-      const e = document.createElement("span");
-      e.style.color = chk.ok ? "var(--ok)" : "var(--bad)";
-      if (chk.ok) {
-        e.textContent = "عبور ✓ " + fa(chk.latency_ms) + "ms" + (chk.exit_ip ? " · خروجی " + chk.exit_ip : "");
-      } else {
-        e.textContent = "عبور ✗ " + (chk.detail || "");
+    if (!isServer) {
+      const chk = tn.checks[t.id];
+      if (chk) {
+        const e = document.createElement("span");
+        e.style.color = chk.ok ? "var(--ok)" : "var(--bad)";
+        e.textContent = chk.ok
+          ? ("عبور ✓ " + fa(chk.latency_ms) + "ms" + (chk.exit_ip ? " · خروجی " + chk.exit_ip : ""))
+          : ("عبور ✗ " + (chk.detail || ""));
+        meta.append(e);
       }
-      meta.append(e);
     }
 
     const acts = document.createElement("div"); acts.className = "actions";
     const toggle = document.createElement("button");
     if (t.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => tnAction("stop", t.id); }
     else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => tnAction("start", t.id); }
-    const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
-    const chkBtn = document.createElement("button"); chkBtn.className = "ghost"; chkBtn.textContent = "تست عبور"; chkBtn.onclick = () => checkTunnel(t.id, chkBtn);
     const logsBtn = document.createElement("button"); logsBtn.className = "ghost"; logsBtn.textContent = "لاگ"; logsBtn.onclick = () => openTnLogs(t.id);
     const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
     del.onclick = () => { if (confirm("این تانل حذف شود؟")) tnAction("delete", t.id); };
-    acts.append(toggle, srvBtn, chkBtn, logsBtn, del);
+    if (isServer) {
+      acts.append(toggle, logsBtn, del);
+    } else {
+      const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
+      const chkBtn = document.createElement("button"); chkBtn.className = "ghost"; chkBtn.textContent = "تست عبور"; chkBtn.onclick = () => checkTunnel(t.id, chkBtn);
+      acts.append(toggle, srvBtn, chkBtn, logsBtn, del);
+    }
 
     row.append(head, meta, acts);
     box.appendChild(row);
@@ -789,6 +796,20 @@ $("tn-create").addEventListener("click", async () => {
     }
     loadTunnels();
   } catch (e) { setError("tn-error", e.message); }
+  finally { btn.disabled = false; }
+});
+$("imp-save").addEventListener("click", async () => {
+  setError("imp-error", "");
+  const name = $("imp-name").value.trim();
+  const config = $("imp-config").value.trim();
+  if (!config) { setError("imp-error", "کانفیگ سرور یا دستور کامل را بگذار"); return; }
+  const btn = $("imp-save"); btn.disabled = true;
+  try {
+    await api("/api/tunnels/import", { method: "POST", body: { name: name, config: config } });
+    $("imp-name").value = ""; $("imp-config").value = "";
+    toast("سرور ذخیره و اجرا شد", "ok");
+    loadTunnels();
+  } catch (e) { setError("imp-error", e.message); }
   finally { btn.disabled = false; }
 });
 async function openTnServer(id) {

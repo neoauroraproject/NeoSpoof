@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,8 +26,9 @@ type tunnelConf struct {
 	Name       string `json:"name"`
 	SocksPort  int    `json:"socks_port"`
 	PeerRealIP string `json:"peer_real_ip"`
-	TOML       string `json:"toml"`        // client config the local core runs
-	ServerTOML string `json:"server_toml"` // matched config for the exit server
+	TOML       string `json:"toml"`                 // the config this tunnel's core runs
+	ServerTOML string `json:"server_toml"`          // matched exit-server config (client tunnels only)
+	Role       string `json:"role,omitempty"`       // "" = client (default), "server" = imported exit server
 }
 
 type tunnelInstance struct {
@@ -39,10 +41,11 @@ type tunnelInstance struct {
 }
 
 type tunnelManager struct {
-	dir      string
-	cfgDir   string
-	corePath string
-	coreArgs []string // how the core is invoked: coreArgs with {config} replaced
+	dir            string
+	cfgDir         string
+	corePath       string // client core binary (local tunnels)
+	serverCorePath string // server core binary (imported exit-server tunnels)
+	coreArgs       []string // how the core is invoked: coreArgs with {config} replaced
 
 	mu   sync.Mutex
 	seq  int
@@ -51,17 +54,18 @@ type tunnelManager struct {
 
 const maxTunnelLogs = 400
 
-func openManager(dir, corePath string) (*tunnelManager, error) {
+func openManager(dir, corePath, serverCorePath string) (*tunnelManager, error) {
 	cfgDir := filepath.Join(dir, "tunnels")
 	if err := os.MkdirAll(cfgDir, 0700); err != nil {
 		return nil, err
 	}
 	m := &tunnelManager{
-		dir:      dir,
-		cfgDir:   cfgDir,
-		corePath: corePath,
-		coreArgs: []string{"--config", "{config}"},
-		inst:     map[int]*tunnelInstance{},
+		dir:            dir,
+		cfgDir:         cfgDir,
+		corePath:       corePath,
+		serverCorePath: serverCorePath,
+		coreArgs:       []string{"--config", "{config}"},
+		inst:           map[int]*tunnelInstance{},
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "tunnels.json"))
 	if err == nil {
@@ -102,6 +106,7 @@ type tunnelDTO struct {
 	Name       string `json:"name"`
 	SocksPort  int    `json:"socks_port"`
 	PeerRealIP string `json:"peer_real_ip"`
+	Role       string `json:"role,omitempty"`
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	Uptime     int64  `json:"uptime,omitempty"`
@@ -114,7 +119,7 @@ func (m *tunnelManager) list() []tunnelDTO {
 	for _, in := range m.inst {
 		d := tunnelDTO{
 			ID: in.conf.ID, Name: in.conf.Name, SocksPort: in.conf.SocksPort,
-			PeerRealIP: in.conf.PeerRealIP, Status: in.status, Error: in.errText,
+			PeerRealIP: in.conf.PeerRealIP, Role: in.conf.Role, Status: in.status, Error: in.errText,
 		}
 		if in.status == "running" {
 			d.Uptime = int64(time.Since(in.started).Seconds())
@@ -148,6 +153,45 @@ func (m *tunnelManager) create(name, peerRealIP string, socksPort int, toml, ser
 		return tunnelDTO{}, err
 	}
 	return tunnelDTO{ID: c.ID, Name: c.Name, SocksPort: c.SocksPort, PeerRealIP: c.PeerRealIP, Status: "stopped"}, nil
+}
+
+// importServer takes a pasted exit-server config (the raw server.toml, or the
+// whole one-line setup command containing it) and registers it as a server-role
+// tunnel the panel runs locally — no terminal needed. It fixes this machine's
+// own real_ip (detected toward the peer) so the config is correct here, and
+// keeps the shared port/key/icmp from the pasted config untouched.
+func (m *tunnelManager) importServer(name, pasted string) (tunnelDTO, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return tunnelDTO{}, errInput("نام لازم است")
+	}
+	body := extractServerTOML(pasted)
+	if !strings.Contains(body, "pre_shared_key") || !strings.Contains(body, "data_port") {
+		return tunnelDTO{}, errInput("کانفیگ سرور معتبر نیست؛ کل دستور یا متن server.toml را بگذارید")
+	}
+	peer := tomlValue(body, "peer_real_ip")
+	// Set THIS server's own real_ip to the local address toward the client, so a
+	// config whose real_ip was guessed on the other side is corrected here.
+	if ip := net.ParseIP(peer).To4(); ip != nil {
+		if out, err := outboundIP(ip); err == nil {
+			body = setTOMLString(body, "real_ip", out.String())
+		}
+	}
+	socks := 0
+	if v := tomlValue(body, "socks5_port"); v != "" {
+		socks, _ = strconv.Atoi(v)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seq++
+	c := tunnelConf{ID: m.seq, Name: name, SocksPort: socks, PeerRealIP: peer, TOML: body, Role: "server"}
+	m.inst[c.ID] = &tunnelInstance{conf: c, status: "stopped"}
+	if err := m.saveLocked(); err != nil {
+		delete(m.inst, c.ID)
+		m.seq--
+		return tunnelDTO{}, err
+	}
+	return tunnelDTO{ID: c.ID, Name: c.Name, SocksPort: c.SocksPort, PeerRealIP: c.PeerRealIP, Role: "server", Status: "stopped"}, nil
 }
 
 func (m *tunnelManager) remove(id int) error {
@@ -189,7 +233,13 @@ func (m *tunnelManager) start(id int) error {
 			args[i] = a
 		}
 	}
-	cmd := exec.Command(m.corePath, args...)
+	// Server-role tunnels (imported exit servers) run the server core; everything
+	// else runs the client core.
+	core := m.corePath
+	if in.conf.Role == "server" {
+		core = m.serverCorePath
+	}
+	cmd := exec.Command(core, args...)
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 	in.logs = nil

@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.1.2"
+const version = "1.2.0"
 
 //go:embed web
 var webFS embed.FS
@@ -41,7 +41,8 @@ func main() {
 	addr := flag.String("addr", "0.0.0.0", "listen address")
 	port := flag.Int("port", 0, "fixed port (0 = random)")
 	licenseProxy := flag.String("license-proxy", "", "SOCKS5 proxy for license checks (host:port)")
-	corePath := flag.String("core", "client", "path to the spoof core binary each tunnel runs")
+	corePath := flag.String("core", "client", "path to the spoof CLIENT core binary local tunnels run")
+	serverCore := flag.String("server-core", "server", "path to the spoof SERVER core binary imported exit-server tunnels run")
 	flag.Parse()
 
 	auth, password, created, err := openAuth(*dataDir, *reset)
@@ -56,7 +57,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	mgr, err := openManager(*dataDir, *corePath)
+	mgr, err := openManager(*dataDir, *corePath, *serverCore)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,6 +89,7 @@ func main() {
 	mux.HandleFunc("/api/tunnels/logs", s.guard(s.handleTunnelLogs))
 	mux.HandleFunc("/api/tunnels/server", s.guard(s.handleTunnelServer))
 	mux.HandleFunc("/api/tunnels/check", s.guard(s.handleTunnelCheck))
+	mux.HandleFunc("/api/tunnels/import", s.guard(s.handleTunnelImport))
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -516,6 +518,36 @@ func (s *server) handleTunnelServer(w http.ResponseWriter, r *http.Request) {
 		"server_toml":  conf.ServerTOML,
 		"command":      serverSetupCommand(conf.ServerTOML),
 	})
+}
+
+// handleTunnelImport registers a pasted exit-server config as a server-role
+// tunnel the panel runs locally (the far side's "paste in the panel & save"
+// flow), fixing this machine's real_ip, then starts it right away.
+func (s *server) handleTunnelImport(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Name   string `json:"name"`
+		Config string `json:"config"`
+	}
+	if err := readJSON(r, &body, 1<<20); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	dto, err := s.manager.importServer(body.Name, body.Config)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// "Save" brings it up immediately; a missing server core just lands in
+	// "error" while the config stays saved.
+	_ = s.manager.start(dto.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
 }
 
 // handleTunnelCheck sends a real request out through one tunnel's SOCKS5 proxy

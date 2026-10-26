@@ -8,7 +8,7 @@ import (
 
 func TestManagerCreateListPersist(t *testing.T) {
 	dir := t.TempDir()
-	m, err := openManager(dir, "client")
+	m, err := openManager(dir, "client", "server")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestManagerCreateListPersist(t *testing.T) {
 	}
 
 	// Reopening loads persisted tunnels.
-	m2, err := openManager(dir, "client")
+	m2, err := openManager(dir, "client", "server")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestManagerCreateListPersist(t *testing.T) {
 
 func TestManagerStartMissingCore(t *testing.T) {
 	dir := t.TempDir()
-	m, err := openManager(dir, filepath.Join(dir, "no-such-core-binary"))
+	m, err := openManager(dir, filepath.Join(dir, "no-such-core-binary"), filepath.Join(dir, "no-such-server-core"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestManagerStartMissingCore(t *testing.T) {
 
 func TestManagerRemove(t *testing.T) {
 	dir := t.TempDir()
-	m, _ := openManager(dir, "client")
+	m, _ := openManager(dir, "client", "server")
 	dto, _ := m.create("Y", "203.0.113.5", 2080, "toml", "srv")
 	if err := m.remove(dto.ID); err != nil {
 		t.Fatal(err)

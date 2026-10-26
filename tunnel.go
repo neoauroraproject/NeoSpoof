@@ -185,6 +185,57 @@ func serverSetupCommand(serverTOML string) string {
 	return b.String()
 }
 
+// extractServerTOML pulls the server config body out of a pasted blob: if it
+// carries the installer heredoc markers (CANDYEOF), return what is between them;
+// otherwise return the text as-is (assumed to be a raw server.toml).
+func extractServerTOML(s string) string {
+	const marker = "CANDYEOF"
+	i := strings.Index(s, marker)
+	if i < 0 {
+		return strings.TrimSpace(s)
+	}
+	rest := s[i+len(marker):]
+	// Skip the rest of the opener line (e.g. the closing quote of <<'CANDYEOF'),
+	// so the body starts at the first config line, not a stray quote.
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[nl+1:]
+	}
+	if j := strings.Index(rest, marker); j >= 0 {
+		return strings.TrimSpace(rest[:j])
+	}
+	return strings.TrimSpace(rest)
+}
+
+// tomlValue reads the quoted string value of `key = "..."` from a TOML body.
+// It matches the key only as a whole word at the start of a (trimmed) line, so
+// peer_real_ip and real_ip do not collide.
+func tomlValue(body, key string) string {
+	for _, line := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, key) {
+			continue
+		}
+		rest := strings.TrimSpace(t[len(key):])
+		if strings.HasPrefix(rest, "=") {
+			return strings.Trim(strings.TrimSpace(rest[1:]), `"`)
+		}
+	}
+	return ""
+}
+
+// setTOMLString rewrites the value of `key = "..."`, preserving the line indent.
+func setTOMLString(body, key, val string) string {
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, key) && strings.Contains(t[len(key):], "=") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + key + "         = \"" + val + "\""
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func fillTemplate(tmpl string, kv map[string]string) string {
 	for k, v := range kv {
 		tmpl = strings.ReplaceAll(tmpl, "{{"+k+"}}", v)
