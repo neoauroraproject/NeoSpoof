@@ -107,6 +107,9 @@ type tunnelDTO struct {
 	SocksPort  int    `json:"socks_port"`
 	PeerRealIP string `json:"peer_real_ip"`
 	Role       string `json:"role,omitempty"`
+	Primary    string `json:"primary,omitempty"`   // spoofed source IP
+	DataPort   int    `json:"data_port,omitempty"` // UDP data channel port
+	PoolSize   int    `json:"pool_size,omitempty"` // number of spoofed IPs
 	Status     string `json:"status"`
 	Error      string `json:"error,omitempty"`
 	Uptime     int64  `json:"uptime,omitempty"`
@@ -120,6 +123,11 @@ func (m *tunnelManager) list() []tunnelDTO {
 		d := tunnelDTO{
 			ID: in.conf.ID, Name: in.conf.Name, SocksPort: in.conf.SocksPort,
 			PeerRealIP: in.conf.PeerRealIP, Role: in.conf.Role, Status: in.status, Error: in.errText,
+			Primary:  tomlValue(in.conf.TOML, "spoofed_ip"),
+			PoolSize: poolCount(in.conf.TOML),
+		}
+		if dp := tomlValue(in.conf.TOML, "data_port"); dp != "" {
+			d.DataPort, _ = strconv.Atoi(dp)
 		}
 		if in.status == "running" {
 			d.Uptime = int64(time.Since(in.started).Seconds())
@@ -358,6 +366,10 @@ func (m *tunnelManager) check(id int) (trafficCheck, error) {
 		m.mu.Unlock()
 		return trafficCheck{}, errInput("لوکیشن پیدا نشد")
 	}
+	if in.conf.Role == "server" {
+		m.mu.Unlock()
+		return trafficCheck{}, errInput("تانل سرور پروکسی SOCKS ندارد؛ عبور را از سمت کلاینت تست کن")
+	}
 	if in.status != "running" {
 		m.mu.Unlock()
 		return trafficCheck{}, errInput("تانل فعال نیست؛ اول فعال‌سازی کنید")
@@ -369,20 +381,19 @@ func (m *tunnelManager) check(id int) (trafficCheck, error) {
 		Timeout:   12 * time.Second,
 		Transport: &http.Transport{DialContext: socksDialer("127.0.0.1:" + strconv.Itoa(port))},
 	}
+	// Plain HTTP (no TLS handshake) so the measured time is close to the tunnel
+	// round-trip, not a multi-RTT HTTPS transaction; the body is the exit IP.
 	start := time.Now()
-	resp, err := client.Get("https://www.cloudflare.com/cdn-cgi/trace")
+	resp, err := client.Get("http://checkip.amazonaws.com")
 	if err != nil {
 		return trafficCheck{OK: false, Detail: "ترافیک عبور نکرد: " + err.Error()}, nil
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	lat := time.Since(start).Milliseconds()
-	exitIP := ""
-	for _, line := range strings.Split(string(body), "\n") {
-		if strings.HasPrefix(line, "ip=") {
-			exitIP = strings.TrimPrefix(line, "ip=")
-			break
-		}
+	exitIP := strings.TrimSpace(string(body))
+	if net.ParseIP(exitIP) == nil {
+		exitIP = ""
 	}
 	ok := resp.StatusCode > 0 && resp.StatusCode < 500
 	detail := "پاسخ از طریق تانل دریافت شد"
@@ -390,6 +401,55 @@ func (m *tunnelManager) check(id int) (trafficCheck, error) {
 		detail = "پاسخ نامعتبر از تانل: " + resp.Status
 	}
 	return trafficCheck{OK: ok, LatencyMS: lat, Bytes: len(body), ExitIP: exitIP, Detail: detail}, nil
+}
+
+// speedResult is the throughput measured by pulling a few MB through a tunnel's
+// SOCKS proxy — real data rate, not just a latency ping.
+type speedResult struct {
+	OK      bool    `json:"ok"`
+	Mbps    float64 `json:"mbps"`
+	Bytes   int64   `json:"bytes"`
+	Seconds float64 `json:"seconds"`
+	Detail  string  `json:"detail,omitempty"`
+}
+
+// speedTest downloads a few MB through the tunnel's SOCKS proxy and reports the
+// throughput in Mbps.
+func (m *tunnelManager) speedTest(id int) (speedResult, error) {
+	m.mu.Lock()
+	in := m.inst[id]
+	if in == nil {
+		m.mu.Unlock()
+		return speedResult{}, errInput("لوکیشن پیدا نشد")
+	}
+	if in.conf.Role == "server" {
+		m.mu.Unlock()
+		return speedResult{}, errInput("تانل سرور پروکسی ندارد؛ سرعت را از سمت کلاینت تست کن")
+	}
+	if in.status != "running" {
+		m.mu.Unlock()
+		return speedResult{}, errInput("تانل فعال نیست؛ اول فعال‌سازی کنید")
+	}
+	port := in.conf.SocksPort
+	m.mu.Unlock()
+
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{DialContext: socksDialer("127.0.0.1:" + strconv.Itoa(port))},
+	}
+	start := time.Now()
+	resp, err := client.Get("http://speed.cloudflare.com/__down?bytes=3000000")
+	if err != nil {
+		return speedResult{OK: false, Detail: "تست سرعت ناموفق بود: " + err.Error()}, nil
+	}
+	defer resp.Body.Close()
+	n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<20))
+	secs := time.Since(start).Seconds()
+	mbps := 0.0
+	if secs > 0 {
+		mbps = float64(n) * 8 / 1e6 / secs
+	}
+	return speedResult{OK: n > 0, Mbps: mbps, Bytes: n, Seconds: secs}, nil
 }
 
 // runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so

@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.3.1"
+const version = "1.4.0"
 
 //go:embed web
 var webFS embed.FS
@@ -32,6 +32,7 @@ type server struct {
 	settings *settingsStore
 	license  *licenseManager
 	manager  *tunnelManager
+	peers    *peerStore
 	dataDir  string
 }
 
@@ -61,6 +62,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	peers, err := openPeers(*dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
 	// Let the license check fall back through the panel's own running tunnels.
 	lic.proxyFn = mgr.runningSocksAddrs
 	ln, boundPort, err := listen(*addr, *port)
@@ -68,7 +73,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := &server{auth: auth, probe: newProbe(), settings: set, license: lic, manager: mgr, dataDir: *dataDir}
+	s := &server{auth: auth, probe: newProbe(), settings: set, license: lic, manager: mgr, peers: peers, dataDir: *dataDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleStatic)
 	mux.HandleFunc("/api/login", s.handleLogin)
@@ -89,7 +94,11 @@ func main() {
 	mux.HandleFunc("/api/tunnels/logs", s.guard(s.handleTunnelLogs))
 	mux.HandleFunc("/api/tunnels/server", s.guard(s.handleTunnelServer))
 	mux.HandleFunc("/api/tunnels/check", s.guard(s.handleTunnelCheck))
+	mux.HandleFunc("/api/tunnels/speed", s.guard(s.handleTunnelSpeed))
+	mux.HandleFunc("/api/tunnels/restart", s.guard(s.handleTunnelRestart))
 	mux.HandleFunc("/api/tunnels/import", s.guard(s.handleTunnelImport))
+	mux.HandleFunc("/api/peers", s.guard(s.handlePeers))
+	mux.HandleFunc("/api/peers/delete", s.guard(s.handlePeerDelete))
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -552,6 +561,42 @@ func (s *server) handleTunnelImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
 }
 
+// handleTunnelRestart stops then starts a tunnel, swapping it onto a fresh core
+// process (useful after the far side changed or the core got stuck).
+func (s *server) handleTunnelRestart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	_ = s.manager.stop(id)
+	if err := s.manager.start(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tunnels": s.manager.list()})
+}
+
+// handleTunnelSpeed measures real throughput (Mbps) through a tunnel's SOCKS5
+// proxy by pulling a few MB, so the traffic table shows data rate, not just ping.
+func (s *server) handleTunnelSpeed(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.manager.speedTest(id)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // handleTunnelCheck sends a real request out through one tunnel's SOCKS5 proxy
 // and reports whether traffic actually passes, with latency and the exit IP.
 func (s *server) handleTunnelCheck(w http.ResponseWriter, r *http.Request) {
@@ -568,6 +613,51 @@ func (s *server) handleTunnelCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// handlePeers lists or adds saved servers (the Iran/exit registry), so the
+// operator picks a server at test/tunnel time instead of retyping an IP.
+func (s *server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"peers": s.peers.all()})
+	case http.MethodPost:
+		var body struct {
+			Name string `json:"name"`
+			IP   string `json:"ip"`
+			Role string `json:"role"`
+		}
+		if err := readJSON(r, &body, 1<<16); err != nil {
+			writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+			return
+		}
+		if _, err := s.peers.add(body.Name, body.IP, body.Role); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"peers": s.peers.all()})
+	default:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ID int `json:"id"`
+	}
+	if err := readJSON(r, &body, 1<<16); err != nil {
+		writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+		return
+	}
+	if err := s.peers.remove(body.ID); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"peers": s.peers.all()})
 }
 
 // requireLicense blocks operational endpoints until the license is active.

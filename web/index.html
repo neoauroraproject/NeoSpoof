@@ -9,6 +9,7 @@
 </head>
 <body>
   <div id="toasts" class="toasts" role="region" aria-label="پیام‌ها" aria-live="polite"></div>
+  <datalist id="peers-opts"></datalist>
 
   <!-- ===== Login ===== -->
   <div id="login-screen" class="login-screen">
@@ -131,6 +132,29 @@
           </div>
           <div class="actions"><button id="site-save" class="cta" type="button">ذخیره</button></div>
         </div>
+
+        <div class="card stack">
+          <h2>سرورها</h2>
+          <p class="muted lead">سرورهای ایران و خارج را یک‌بار اینجا ثبت کن؛ موقع تست و ساخت تانل به‌جای تایپ آی‌پی از همین‌ها انتخاب می‌کنی. خارج‌ها می‌توانند چندتا باشند.</p>
+          <div class="grid2">
+            <label>نام سرور
+              <input id="peer-name" type="text" placeholder="مثلاً آلمان-۱">
+            </label>
+            <label>آی‌پی
+              <input id="peer-ip" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+            </label>
+            <label>نقش
+              <select id="peer-role">
+                <option value="exit">خارج (اکسیت)</option>
+                <option value="source">ایران (مبدأ)</option>
+              </select>
+            </label>
+          </div>
+          <p id="peer-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button id="peer-add" class="cta" type="button">افزودن سرور</button></div>
+          <div id="peer-list" aria-live="polite"></div>
+        </div>
+
         <div class="stat-grid">
           <div class="stat-card"><span class="stat-label">کل تانل‌ها</span><span id="st-total" class="stat-num">۰</span><span class="stat-sub">لوکیشن‌های ساخته‌شده</span></div>
           <div class="stat-card accent-ok"><span class="stat-label">فعال</span><span id="st-active" class="stat-num">۰</span><span class="stat-sub">در حال اجرا</span></div>
@@ -140,9 +164,12 @@
         <section class="card stack">
           <div class="row spread">
             <h2>ترافیک تانل‌ها</h2>
-            <button id="dash-refresh" class="ghost" type="button">بررسی عبور همه</button>
+            <div class="row">
+              <button id="dash-refresh" class="ghost" type="button">بررسی عبور همه</button>
+              <button id="dash-speed" class="ghost" type="button">تست سرعت همه</button>
+            </div>
           </div>
-          <p class="muted lead">وضعیت زندهٔ عبور ترافیک از مسیر SOCKS هر تانل. تانل‌های فعال هر چند ثانیه یک‌بار خودکار بررسی می‌شوند و تأخیر و آی‌پی خروجی نمایش داده می‌شود.</p>
+          <p class="muted lead">جدول زندهٔ هر تانل: وضعیت عبور از مسیر SOCKS، تأخیر، سرعت (با «تست سرعت») و آی‌پی خروجی. عبور هر چند ثانیه یک‌بار خودکار بررسی می‌شود. تانل‌های «سرور» پروکسی ندارند و عبور/سرعت برایشان بی‌معناست.</p>
           <div id="dash-list" aria-live="polite"></div>
         </section>
       </section>
@@ -160,7 +187,7 @@
             </div>
           </div>
           <label id="simple-dst-label">آی‌پی سرور مقصد
-            <input id="simple-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+            <input id="simple-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45" list="peers-opts">
             <span class="hint">گیرنده را روی همان مقصد، قبل از ارسال، شروع کنید. نتیجه آنجا دیده می‌شود.</span>
           </label>
           <div class="actions">
@@ -185,7 +212,7 @@
             </div>
           </div>
           <label id="list-dst-label">آی‌پی سرور مقصد
-            <input id="list-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+            <input id="list-dst" class="ltr" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45" list="peers-opts">
           </label>
           <label>لیست آی‌پی
             <textarea id="list-ips" class="ltr" spellcheck="false" placeholder="192.0.2.10&#10;192.0.2.11"></textarea>
@@ -215,7 +242,7 @@
               <input id="tn-name" type="text" placeholder="مثلاً آلمان">
             </label>
             <label>آی‌پی سرور مقصد
-              <input id="tn-peer" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45">
+              <input id="tn-peer" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45" list="peers-opts">
             </label>
             <label>پورت SOCKS
               <input id="tn-socks" type="number" class="ltr" min="1024" max="65535" value="1080">

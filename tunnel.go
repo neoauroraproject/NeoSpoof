@@ -33,7 +33,7 @@ pre_shared_key  = "{{psk}}"
 allowed_peers   = {{pool}}
 tunnel_count    = 4
 mtu             = 1380
-initial_cwnd    = 10.0
+initial_cwnd    = 30.0
 interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
@@ -52,7 +52,7 @@ pre_shared_key  = "{{psk}}"
 allowed_peers   = {{pool}}
 tunnel_count    = 4
 mtu             = 1380
-initial_cwnd    = 10.0
+initial_cwnd    = 30.0
 interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
@@ -236,6 +236,26 @@ func setTOMLString(body, key, val string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// poolCount returns how many spoofed IPs a config's spoofed_ip_pool line holds.
+func poolCount(toml string) int {
+	for _, line := range strings.Split(toml, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "spoofed_ip_pool") {
+			continue
+		}
+		i := strings.IndexByte(t, '[')
+		j := strings.LastIndexByte(t, ']')
+		if i < 0 || j <= i {
+			return 0
+		}
+		if inner := strings.TrimSpace(t[i+1 : j]); inner != "" {
+			return strings.Count(inner, ",") + 1
+		}
+		return 0
+	}
+	return 0
 }
 
 // ifaceToward returns the local NIC name used to reach ipStr, or "eth0" when it

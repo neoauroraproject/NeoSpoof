@@ -110,7 +110,7 @@ function showLicense(lic) {
 }
 // gate decides which screen to show once we know the license state.
 function gate(me) {
-  if (me && me.license && me.license.active) { showApp(); selectView(state.view); return refresh(); }
+  if (me && me.license && me.license.active) { showApp(); selectView(state.view); loadPeers(); return refresh(); }
   showLicense(me ? me.license : null);
 }
 
@@ -740,7 +740,7 @@ function applyFilter(view) {
 }
 
 /* ===== tunnels (activation) ===== */
-const tn = { listTimer: 0, logsTimer: 0, logsId: 0, checks: {} };
+const tn = { listTimer: 0, logsTimer: 0, logsId: 0, checks: {}, speeds: {} };
 const TN_STATUS = { running: "فعال", stopped: "متوقف", error: "خطا" };
 
 function startTunnels() {
@@ -780,6 +780,9 @@ function renderTunnels(list) {
     const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
     if (isServer) meta.append(m("نقش", "سرور (اکسیت)"), m("کلاینت", t.peer_real_ip || "—"));
     else meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
+    if (t.primary) meta.append(m("آی‌پی اسپوف", t.primary));
+    if (t.pool_size) meta.append(m("تعداد اسپوف", fa(t.pool_size)));
+    if (t.data_port) meta.append(m("پورت داده", fa(t.data_port)));
     if (t.status === "running" && t.uptime) meta.append(m("آپ‌تایم", fa(t.uptime) + "s"));
     if (t.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = t.error; meta.append(e); }
     if (!isServer) {
@@ -798,15 +801,16 @@ function renderTunnels(list) {
     const toggle = document.createElement("button");
     if (t.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => tnAction("stop", t.id); }
     else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => tnAction("start", t.id); }
+    const restart = document.createElement("button"); restart.className = "ghost"; restart.textContent = "ری‌استارت"; restart.onclick = () => tnAction("restart", t.id);
     const logsBtn = document.createElement("button"); logsBtn.className = "ghost"; logsBtn.textContent = "لاگ"; logsBtn.onclick = () => openTnLogs(t.id);
     const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
     del.onclick = () => { if (confirm("این تانل حذف شود؟")) tnAction("delete", t.id); };
     if (isServer) {
-      acts.append(toggle, logsBtn, del);
+      acts.append(toggle, restart, logsBtn, del);
     } else {
       const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
       const chkBtn = document.createElement("button"); chkBtn.className = "ghost"; chkBtn.textContent = "تست عبور"; chkBtn.onclick = () => checkTunnel(t.id, chkBtn);
-      acts.append(toggle, srvBtn, chkBtn, logsBtn, del);
+      acts.append(toggle, restart, srvBtn, chkBtn, logsBtn, del);
     }
 
     row.append(head, meta, acts);
@@ -914,11 +918,13 @@ async function loadDash() {
   if (document.hidden) return;
   try { const d = await api("/api/tunnels"); renderDash(d.tunnels || []); } catch (e) { /* 401/403 handled */ }
 }
+const isClient = (t) => t.role !== "server";
 function renderDash(list) {
   const running = list.filter((t) => t.status === "running");
+  const proxies = running.filter(isClient);
   $("st-total").textContent = fa(list.length);
   $("st-active").textContent = fa(running.length);
-  $("st-proxies").textContent = fa(running.length);
+  $("st-proxies").textContent = fa(proxies.length);
   const lats = [];
   list.forEach((t) => { const c = tn.checks[t.id]; if (c && c.ok && c.latency_ms) lats.push(c.latency_ms); });
   $("st-lat").textContent = lats.length ? fa(Math.round(lats.reduce((a, b) => a + b, 0) / lats.length)) + "ms" : "—";
@@ -931,39 +937,126 @@ function renderDash(list) {
     box.appendChild(p);
     return;
   }
-  list.forEach((t) => {
-    const row = document.createElement("div"); row.className = "dash-row";
-    const head = document.createElement("div"); head.className = "row";
-    const name = document.createElement("span"); name.className = "name"; name.textContent = t.name || ("#" + t.id);
-    const badge = document.createElement("span"); badge.className = "badge st-" + t.status; badge.textContent = TN_STATUS[t.status] || t.status;
-    head.append(name, badge);
-    const meta = document.createElement("div"); meta.className = "meta";
-    const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
-    meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
-    const c = tn.checks[t.id];
-    if (c) {
-      const e = document.createElement("span");
-      e.style.color = c.ok ? "var(--ok)" : "var(--bad)";
-      e.textContent = c.ok ? ("عبور ✓ " + fa(c.latency_ms) + "ms" + (c.exit_ip ? " · خروجی " + c.exit_ip : "")) : ("عبور ✗ " + (c.detail || ""));
-      meta.append(e);
-    } else if (t.status === "running") {
-      const e = document.createElement("span"); e.className = "muted"; e.textContent = "در حال بررسی عبور…"; meta.append(e);
-    }
-    row.append(head, meta);
-    box.appendChild(row);
+  const wrap = document.createElement("div"); wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  ["لوکیشن", "وضعیت", "SOCKS", "مقصد", "عبور", "تأخیر", "سرعت", "آی‌پی خروجی"].forEach((h) => {
+    const th = document.createElement("th"); th.textContent = h; th.scope = "col"; hr.appendChild(th);
   });
+  thead.appendChild(hr);
+  const tbody = document.createElement("tbody");
+  list.forEach((t) => {
+    const tr = document.createElement("tr");
+    const td = (txt, cls) => { const d = document.createElement("td"); if (cls) d.className = cls; if (txt !== undefined) d.textContent = txt; return d; };
+    const server = !isClient(t);
+    // name
+    tr.appendChild(td(t.name || ("#" + t.id)));
+    // status
+    const stTd = document.createElement("td");
+    const b = document.createElement("span"); b.className = "badge st-" + t.status; b.textContent = TN_STATUS[t.status] || t.status;
+    stTd.appendChild(b); tr.appendChild(stTd);
+    // socks / dest
+    tr.appendChild(td(server ? "— (سرور)" : "127.0.0.1:" + t.socks_port, "ltr"));
+    tr.appendChild(td(t.peer_real_ip || "—", "ltr"));
+    // pass / latency / speed / exit
+    const c = tn.checks[t.id];
+    const sp = tn.speeds[t.id];
+    if (server) {
+      tr.appendChild(td("—")); tr.appendChild(td("—")); tr.appendChild(td("—")); tr.appendChild(td("—"));
+    } else {
+      const passTd = document.createElement("td");
+      if (c) { passTd.textContent = c.ok ? "✓" : "✗"; passTd.style.color = c.ok ? "var(--ok)" : "var(--bad)"; passTd.title = c.detail || ""; }
+      else if (t.status === "running") { passTd.textContent = "…"; passTd.className = "muted"; }
+      else { passTd.textContent = "—"; }
+      tr.appendChild(passTd);
+      tr.appendChild(td(c && c.ok && c.latency_ms ? fa(c.latency_ms) + "ms" : "—", "ltr"));
+      tr.appendChild(td(sp && sp.ok ? fa(Math.round(sp.mbps * 10) / 10) + " Mbps" : "—", "ltr"));
+      tr.appendChild(td(c && c.exit_ip ? c.exit_ip : "—", "ltr"));
+    }
+    tbody.appendChild(tr);
+  });
+  table.append(thead, tbody);
+  wrap.appendChild(table);
+  box.appendChild(wrap);
 }
 async function runDashChecks() {
   if (document.hidden) return;
   let list = [];
   try { const d = await api("/api/tunnels"); list = d.tunnels || []; } catch (e) { return; }
-  for (const t of list.filter((x) => x.status === "running")) {
+  for (const t of list.filter((x) => x.status === "running" && isClient(x))) {
     try { tn.checks[t.id] = await api("/api/tunnels/check", { method: "POST", body: { id: t.id } }); }
     catch (e) { /* ignore a single failed check */ }
   }
   renderDash(list);
 }
+async function runDashSpeeds() {
+  let list = [];
+  try { const d = await api("/api/tunnels"); list = d.tunnels || []; } catch (e) { return; }
+  const targets = list.filter((x) => x.status === "running" && isClient(x));
+  if (!targets.length) { toast("تانل کلاینت فعالی برای تست سرعت نیست", "err"); return; }
+  toast("تست سرعت شروع شد (چند مگابایت دانلود می‌شود)…", "info");
+  for (const t of targets) {
+    try { tn.speeds[t.id] = await api("/api/tunnels/speed", { method: "POST", body: { id: t.id } }); renderDash(list); }
+    catch (e) { /* ignore a single failed speed test */ }
+  }
+}
 $("dash-refresh").addEventListener("click", () => { runDashChecks(); toast("بررسی عبور شروع شد", "info"); });
+$("dash-speed").addEventListener("click", () => { runDashSpeeds(); });
+
+/* ===== server registry (peers) ===== */
+let peersCache = [];
+const PEER_ROLE_FA = { exit: "خارج", source: "ایران" };
+async function loadPeers() {
+  try { const d = await api("/api/peers"); peersCache = d.peers || []; renderPeers(); } catch (e) { /* 401/403 handled */ }
+}
+function renderPeers() {
+  const dl = $("peers-opts");
+  if (dl) {
+    dl.replaceChildren();
+    peersCache.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.ip;
+      o.label = p.name + (p.role ? " · " + (PEER_ROLE_FA[p.role] || "") : "");
+      dl.appendChild(o);
+    });
+  }
+  const box = $("peer-list");
+  if (!box) return;
+  box.replaceChildren();
+  if (!peersCache.length) {
+    const p = document.createElement("p"); p.className = "muted"; p.textContent = "هنوز سروری ثبت نشده.";
+    box.appendChild(p); return;
+  }
+  peersCache.forEach((pr) => {
+    const row = document.createElement("div"); row.className = "dash-row";
+    const r = document.createElement("div"); r.className = "row spread";
+    const left = document.createElement("div");
+    const nm = document.createElement("b"); nm.textContent = pr.name;
+    const ip = document.createElement("span"); ip.className = "ltr muted"; ip.textContent = "  " + pr.ip + (pr.role ? "  · " + (PEER_ROLE_FA[pr.role] || "") : "");
+    left.append(nm, ip);
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
+    del.onclick = async () => {
+      try { const d = await api("/api/peers/delete", { method: "POST", body: { id: pr.id } }); peersCache = d.peers || []; renderPeers(); }
+      catch (e) { toast(e.message, "err"); }
+    };
+    r.append(left, del);
+    row.appendChild(r);
+    box.appendChild(row);
+  });
+}
+$("peer-add").addEventListener("click", async () => {
+  setError("peer-error", "");
+  const btn = $("peer-add"); btn.disabled = true;
+  try {
+    const d = await api("/api/peers", { method: "POST", body: { name: $("peer-name").value.trim(), ip: $("peer-ip").value.trim(), role: $("peer-role").value } });
+    peersCache = d.peers || [];
+    $("peer-name").value = ""; $("peer-ip").value = "";
+    renderPeers();
+    toast("سرور ثبت شد", "ok");
+  } catch (e) { setError("peer-error", e.message); }
+  finally { btn.disabled = false; }
+});
 
 /* ===== boot ===== */
 applyRole("simple");
