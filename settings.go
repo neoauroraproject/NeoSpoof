@@ -17,10 +17,14 @@ const (
 	maxPPS               = 500
 )
 
-// settings holds the tunable probe parameters the panel exposes.
+// settings holds the tunable probe parameters the panel exposes, plus this
+// server's own identity (source "ایران" vs exit "خارج", and a free label), so
+// the operator can tell panels apart at a glance.
 type settings struct {
-	ListenSeconds int `json:"listen_seconds"`
-	PacketsPerSec int `json:"packets_per_sec"`
+	ListenSeconds int    `json:"listen_seconds"`
+	PacketsPerSec int    `json:"packets_per_sec"`
+	SiteRole      string `json:"site_role"` // "", "source" (ایران/مبدأ), or "exit" (خارج)
+	SiteName      string `json:"site_name"` // free label, e.g. "ایران-۱" or "آلمان-۳"
 }
 
 type settingsStore struct {
@@ -52,6 +56,12 @@ func (s settings) clamp() settings {
 	}
 	if s.PacketsPerSec > maxPPS {
 		s.PacketsPerSec = maxPPS
+	}
+	if s.SiteRole != "source" && s.SiteRole != "exit" {
+		s.SiteRole = ""
+	}
+	if len(s.SiteName) > 60 {
+		s.SiteName = s.SiteName[:60]
 	}
 	return s
 }

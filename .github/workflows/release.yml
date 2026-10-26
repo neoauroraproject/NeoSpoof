@@ -20,11 +20,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Build static binaries
+      - name: Build panel (Go, amd64 + arm64)
         run: |
           mkdir -p dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/neospoof-linux-amd64 .
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/neospoof-linux-arm64 .
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build spoof cores (Rust, amd64)
+        run: |
+          cargo build --release --bins
+          cp target/release/client dist/neospoof-client-linux-amd64
+          cp target/release/server dist/neospoof-server-linux-amd64
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

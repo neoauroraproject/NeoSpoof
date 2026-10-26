@@ -259,10 +259,12 @@ main { padding: 18px 28px 56px; display: grid; gap: 18px; max-width: 1000px; }
 
 label { display: grid; gap: 6px; font-weight: 600; }
 .hint { font-weight: 400; color: var(--muted); font-size: 0.95rem; }
-input[type="text"], input[type="password"], input[type="number"], textarea {
+input[type="text"], input[type="password"], input[type="number"], textarea, select {
   width: 100%; min-height: 46px; border-radius: var(--radius-sm); border: 1px solid var(--line);
   background: var(--bg-soft); padding: 10px 14px; transition: border-color 140ms ease, box-shadow 140ms ease;
 }
+select:hover { border-color: color-mix(in srgb, var(--line) 50%, var(--text)); }
+select:focus { border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent); outline: none; }
 textarea { min-height: 180px; resize: vertical; line-height: 1.5; }
 input:hover, textarea:hover { border-color: color-mix(in srgb, var(--line) 50%, var(--text)); }
 input:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 16%, transparent); outline: none; }

@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.2.0"
+const version = "1.3.0"
 
 //go:embed web
 var webFS embed.FS
@@ -225,6 +225,8 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"version":         version,
 		"listen_seconds":  cfg.ListenSeconds,
 		"packets_per_sec": cfg.PacketsPerSec,
+		"site_role":       cfg.SiteRole,
+		"site_name":       cfg.SiteName,
 		"license":         s.license.status(),
 	})
 }

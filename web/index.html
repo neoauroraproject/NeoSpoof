@@ -96,6 +96,7 @@
           <span class="who">پنل <b>نئو اسپوف</b></span>
         </div>
         <div class="row">
+          <span id="site-pill" class="live" hidden></span>
           <button id="trial-pill" class="ghost" type="button" hidden></button>
           <span id="live" class="live"><span class="pulse"></span><span id="live-text">آماده</span></span>
           <span class="user-chip"><span class="av">A</span> admin</span>
@@ -110,6 +111,26 @@
 
       <!-- Dashboard -->
       <section id="view-dash" class="panel" role="tabpanel" aria-labelledby="tab-dash" tabindex="0">
+        <div class="card stack">
+          <div class="row spread">
+            <h2>این سرور</h2>
+            <span id="site-badge" class="badge" hidden></span>
+          </div>
+          <p class="muted lead">مشخص کن این پنل روی سرور <b>ایران (مبدأ)</b> است یا <b>خارج (اکسیت)</b>، و یک نام بده تا سرورها را از هم تشخیص بدهی. خارج‌ها می‌توانند چندتا و با نام‌های مختلف باشند.</p>
+          <div class="grid2">
+            <label>نقش این سرور
+              <select id="site-role">
+                <option value="">— انتخاب کنید —</option>
+                <option value="source">ایران (مبدأ)</option>
+                <option value="exit">خارج (اکسیت)</option>
+              </select>
+            </label>
+            <label>نام / برچسب
+              <input id="site-name" type="text" maxlength="60" placeholder="مثلاً ایران-۱ یا آلمان-۳">
+            </label>
+          </div>
+          <div class="actions"><button id="site-save" class="cta" type="button">ذخیره</button></div>
+        </div>
         <div class="stat-grid">
           <div class="stat-card"><span class="stat-label">کل تانل‌ها</span><span id="st-total" class="stat-num">۰</span><span class="stat-sub">لوکیشن‌های ساخته‌شده</span></div>
           <div class="stat-card accent-ok"><span class="stat-label">فعال</span><span id="st-active" class="stat-num">۰</span><span class="stat-sub">در حال اجرا</span></div>

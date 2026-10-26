@@ -3,3 +3,4 @@ data/
 spoofd
 spoofd-linux
 secrets/
+/target

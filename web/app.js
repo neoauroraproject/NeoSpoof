@@ -454,7 +454,44 @@ function applyMe(me) {
   }
   renderServerInfo(me);
   renderCapability(me);
+  renderSite(me);
 }
+
+/* ===== server identity (this panel: ایران/مبدأ vs خارج/اکسیت) ===== */
+const ROLE_FA = { source: "ایران (مبدأ)", exit: "خارج (اکسیت)" };
+function renderSite(me) {
+  const role = me.site_role || "";
+  const name = me.site_name || "";
+  const label = (ROLE_FA[role] || "") + (role && name ? " · " : "") + (name || "");
+  const pill = $("site-pill");
+  if (role || name) { pill.hidden = false; pill.textContent = label; }
+  else { pill.hidden = true; }
+  const rs = $("site-role"); if (rs) rs.value = role;
+  const nm = $("site-name"); if (nm) nm.value = name;
+  const badge = $("site-badge");
+  if (badge) {
+    if (role || name) {
+      badge.hidden = false;
+      badge.textContent = label;
+      badge.className = "badge " + (role === "source" ? "v-passed" : "v-listening");
+    } else { badge.hidden = true; }
+  }
+}
+$("site-save").addEventListener("click", async () => {
+  const btn = $("site-save"); btn.disabled = true;
+  try {
+    const cur = await api("/api/settings");
+    const saved = await api("/api/settings", { method: "POST", body: {
+      listen_seconds: cur.listen_seconds,
+      packets_per_sec: cur.packets_per_sec,
+      site_role: $("site-role").value,
+      site_name: $("site-name").value.trim()
+    }});
+    renderSite({ site_role: saved.site_role, site_name: saved.site_name });
+    toast("هویت سرور ذخیره شد", "ok");
+  } catch (e) { toast(e.message, "err"); }
+  finally { btn.disabled = false; }
+});
 function renderCapability(me) {
   const banner = $("cap-banner");
   if (me.raw_ready) { banner.hidden = true; }

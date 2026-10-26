@@ -33,6 +33,28 @@ rm -f "$tmp"
 mkdir -p "$datadir"
 echo "Installed: ${dest}"
 
+# Spoof core binaries (client + server). The panel itself is only the
+# orchestrator — it runs these to actually bring tunnels up. Prebuilt for amd64.
+coreflags=""
+case "$(uname -m)" in
+  x86_64|amd64)
+    for c in client server; do
+      if curl -fL "https://github.com/${repo}/releases/latest/download/neospoof-${c}-linux-amd64" -o "/usr/local/bin/neospoof-${c}"; then
+        chmod 0755 "/usr/local/bin/neospoof-${c}"
+        echo "Installed core: /usr/local/bin/neospoof-${c}"
+      else
+        echo "Warning: could not download the ${c} core (is it in the latest release?)."
+      fi
+    done
+    if [ -x /usr/local/bin/neospoof-client ] && [ -x /usr/local/bin/neospoof-server ]; then
+      coreflags="-core /usr/local/bin/neospoof-client -server-core /usr/local/bin/neospoof-server"
+    fi
+    ;;
+  *)
+    echo "Note: spoof cores are prebuilt only for amd64; build them with cargo on this arch to enable tunnels."
+    ;;
+esac
+
 if command -v systemctl >/dev/null 2>&1; then
   cat >/etc/systemd/system/neospoof.service <<UNIT
 [Unit]
@@ -40,7 +62,7 @@ Description=NeoSpoof panel
 After=network.target
 
 [Service]
-ExecStart=${dest} -data ${datadir} ${NEOSPOOF_PORT:+-port ${NEOSPOOF_PORT}}
+ExecStart=${dest} -data ${datadir} ${NEOSPOOF_PORT:+-port ${NEOSPOOF_PORT}} ${coreflags}
 WorkingDirectory=${datadir}
 Restart=on-failure
 
@@ -65,4 +87,8 @@ else
 fi
 
 echo ""
-echo "Tunnel activation needs the spoof core binary; pass its path with the -core flag."
+if [ -n "$coreflags" ]; then
+  echo "Spoof cores installed and wired; tunnels can be activated from the panel."
+else
+  echo "Spoof cores not installed for this arch; build client/server with cargo and pass -core / -server-core."
+fi
