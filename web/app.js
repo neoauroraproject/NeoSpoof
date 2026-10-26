@@ -136,7 +136,7 @@ function applyTheme(mode) {
   $("theme").innerHTML = eff === "dark" ? SUN : MOON;
   $("theme").setAttribute("aria-label", eff === "dark" ? "تم روشن" : "تم تاریک");
 }
-applyTheme(load("spoofd-theme"));
+applyTheme(load("spoofd-theme") || "light");
 $("theme").addEventListener("click", () => {
   const next = effectiveTheme() === "dark" ? "light" : "dark";
   store("spoofd-theme", next);
@@ -712,7 +712,7 @@ function applyFilter(view) {
 }
 
 /* ===== tunnels (activation) ===== */
-const tn = { listTimer: 0, logsTimer: 0, logsId: 0 };
+const tn = { listTimer: 0, logsTimer: 0, logsId: 0, checks: {} };
 const TN_STATUS = { running: "فعال", stopped: "متوقف", error: "خطا" };
 
 function startTunnels() {
@@ -751,16 +751,28 @@ function renderTunnels(list) {
     meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
     if (t.status === "running" && t.uptime) meta.append(m("آپ‌تایم", fa(t.uptime) + "s"));
     if (t.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = t.error; meta.append(e); }
+    const chk = tn.checks[t.id];
+    if (chk) {
+      const e = document.createElement("span");
+      e.style.color = chk.ok ? "var(--ok)" : "var(--bad)";
+      if (chk.ok) {
+        e.textContent = "عبور ✓ " + fa(chk.latency_ms) + "ms" + (chk.exit_ip ? " · خروجی " + chk.exit_ip : "");
+      } else {
+        e.textContent = "عبور ✗ " + (chk.detail || "");
+      }
+      meta.append(e);
+    }
 
     const acts = document.createElement("div"); acts.className = "actions";
     const toggle = document.createElement("button");
     if (t.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => tnAction("stop", t.id); }
     else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => tnAction("start", t.id); }
     const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
+    const chkBtn = document.createElement("button"); chkBtn.className = "ghost"; chkBtn.textContent = "تست عبور"; chkBtn.onclick = () => checkTunnel(t.id, chkBtn);
     const logsBtn = document.createElement("button"); logsBtn.className = "ghost"; logsBtn.textContent = "لاگ"; logsBtn.onclick = () => openTnLogs(t.id);
     const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
     del.onclick = () => { if (confirm("این تانل حذف شود؟")) tnAction("delete", t.id); };
-    acts.append(toggle, srvBtn, logsBtn, del);
+    acts.append(toggle, srvBtn, chkBtn, logsBtn, del);
 
     row.append(head, meta, acts);
     box.appendChild(row);
@@ -769,6 +781,17 @@ function renderTunnels(list) {
 async function tnAction(path, id) {
   try { const d = await api("/api/tunnels/" + path, { method: "POST", body: { id: id } }); renderTunnels(d.tunnels || []); }
   catch (e) { toast(e.message, "err"); }
+}
+async function checkTunnel(id, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "در حال تست…"; }
+  try {
+    const r = await api("/api/tunnels/check", { method: "POST", body: { id: id } });
+    tn.checks[id] = r;
+    if (r.ok) toast("ترافیک عبور کرد — " + fa(r.latency_ms) + "ms" + (r.exit_ip ? " · خروجی " + r.exit_ip : ""), "ok");
+    else toast(r.detail || "ترافیک عبور نکرد", "err");
+    loadTunnels();
+  } catch (e) { toast(e.message, "err"); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "تست عبور"; } }
 }
 $("tn-create").addEventListener("click", async () => {
   setError("tn-error", "");

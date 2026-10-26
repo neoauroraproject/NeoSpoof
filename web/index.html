@@ -59,31 +59,47 @@
 
   <!-- ===== App ===== -->
   <div id="app" hidden>
-    <header class="top">
-      <div class="wrap">
-        <div class="top-row">
-          <div class="brand">
-            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
-            <span>نئو اسپوف</span>
-            <span id="ver" class="ver" hidden></span>
-          </div>
-          <div class="row">
-            <button id="trial-pill" class="ghost" type="button" hidden></button>
-            <span id="live" class="live"><span class="pulse"></span><span id="live-text">آماده</span></span>
-            <button id="theme" class="ghost icon-only" type="button" aria-label="تغییر تم"></button>
-            <button id="logout" class="ghost icon-btn" type="button">خروج</button>
-          </div>
-        </div>
-        <nav class="nav" role="tablist" aria-label="بخش‌ها">
-          <button class="tab" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="true" aria-controls="view-simple">تست ساده</button>
-          <button class="tab" type="button" role="tab" id="tab-list" data-view="list" aria-selected="false" aria-controls="view-list" tabindex="-1">تست لیست</button>
-          <button class="tab" type="button" role="tab" id="tab-tunnels" data-view="tunnels" aria-selected="false" aria-controls="view-tunnels" tabindex="-1">تانل‌ها</button>
-          <button class="tab" type="button" role="tab" id="tab-settings" data-view="settings" aria-selected="false" aria-controls="view-settings" tabindex="-1">تنظیمات</button>
-        </nav>
+   <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#6d5cf0" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
+        <span>نئو اسپوف</span>
+        <span id="ver" class="ver" hidden></span>
       </div>
-    </header>
+      <nav class="nav" role="tablist" aria-label="بخش‌ها">
+        <button class="navitem" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="true" aria-controls="view-simple">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg><span>تست ساده</span>
+        </button>
+        <button class="navitem" type="button" role="tab" id="tab-list" data-view="list" aria-selected="false" aria-controls="view-list" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span>تست لیست</span>
+        </button>
+        <button class="navitem" type="button" role="tab" id="tab-tunnels" data-view="tunnels" aria-selected="false" aria-controls="view-tunnels" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><span>تانل‌ها</span>
+        </button>
+        <button class="navitem" type="button" role="tab" id="tab-settings" data-view="settings" aria-selected="false" aria-controls="view-settings" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1Z"/></svg><span>تنظیمات</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <button id="theme" class="ghost icon-btn" type="button" aria-label="تغییر تم"></button>
+        <button id="logout" class="ghost icon-btn" type="button">خروج</button>
+      </div>
+    </aside>
 
-    <main class="wrap">
+    <div class="content">
+      <header class="topbar">
+        <div class="hello">
+          <span class="eyebrow">خوش آمدید</span>
+          <span class="who">پنل <b>نئو اسپوف</b></span>
+        </div>
+        <div class="row">
+          <button id="trial-pill" class="ghost" type="button" hidden></button>
+          <span id="live" class="live"><span class="pulse"></span><span id="live-text">آماده</span></span>
+          <span class="user-chip"><span class="av">A</span> admin</span>
+        </div>
+      </header>
+
+    <main>
       <div id="cap-banner" class="notice" hidden>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
         <span id="cap-text"></span>
@@ -260,6 +276,8 @@
         </div>
       </section>
     </main>
+    </div>
+   </div>
   </div>
 
   <script src="app.js"></script>

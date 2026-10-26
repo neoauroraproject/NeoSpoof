@@ -87,6 +87,7 @@ func main() {
 	mux.HandleFunc("/api/tunnels/delete", s.guard(s.handleTunnelDelete))
 	mux.HandleFunc("/api/tunnels/logs", s.guard(s.handleTunnelLogs))
 	mux.HandleFunc("/api/tunnels/server", s.guard(s.handleTunnelServer))
+	mux.HandleFunc("/api/tunnels/check", s.guard(s.handleTunnelCheck))
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -515,6 +516,24 @@ func (s *server) handleTunnelServer(w http.ResponseWriter, r *http.Request) {
 		"server_toml":  conf.ServerTOML,
 		"command":      serverSetupCommand(conf.ServerTOML),
 	})
+}
+
+// handleTunnelCheck sends a real request out through one tunnel's SOCKS5 proxy
+// and reports whether traffic actually passes, with latency and the exit IP.
+func (s *server) handleTunnelCheck(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.manager.check(id)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // requireLicense blocks operational endpoints until the license is active.

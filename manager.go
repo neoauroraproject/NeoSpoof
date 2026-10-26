@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -282,6 +284,60 @@ func (m *tunnelManager) serverConfig(id int) (tunnelConf, error) {
 		return tunnelConf{}, errInput("لوکیشن پیدا نشد")
 	}
 	return in.conf, nil
+}
+
+// trafficCheck is the result of sending a real request out through a tunnel's
+// own SOCKS5 proxy, so the operator can confirm traffic actually crosses it.
+type trafficCheck struct {
+	OK        bool   `json:"ok"`
+	LatencyMS int64  `json:"latency_ms"`
+	Bytes     int    `json:"bytes"`
+	ExitIP    string `json:"exit_ip,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// check routes a lightweight HTTPS request through the tunnel's local SOCKS5
+// port and reports whether it came back, how long it took, and the exit IP seen
+// on the far side — proof that traffic really passes through the tunnel.
+func (m *tunnelManager) check(id int) (trafficCheck, error) {
+	m.mu.Lock()
+	in := m.inst[id]
+	if in == nil {
+		m.mu.Unlock()
+		return trafficCheck{}, errInput("لوکیشن پیدا نشد")
+	}
+	if in.status != "running" {
+		m.mu.Unlock()
+		return trafficCheck{}, errInput("تانل فعال نیست؛ اول فعال‌سازی کنید")
+	}
+	port := in.conf.SocksPort
+	m.mu.Unlock()
+
+	client := &http.Client{
+		Timeout:   12 * time.Second,
+		Transport: &http.Transport{DialContext: socksDialer("127.0.0.1:" + strconv.Itoa(port))},
+	}
+	start := time.Now()
+	resp, err := client.Get("https://www.cloudflare.com/cdn-cgi/trace")
+	if err != nil {
+		return trafficCheck{OK: false, Detail: "ترافیک عبور نکرد: " + err.Error()}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	lat := time.Since(start).Milliseconds()
+	exitIP := ""
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "ip=") {
+			exitIP = strings.TrimPrefix(line, "ip=")
+			break
+		}
+	}
+	ok := resp.StatusCode > 0 && resp.StatusCode < 500
+	detail := "پاسخ از طریق تانل دریافت شد"
+	if !ok {
+		detail = "پاسخ نامعتبر از تانل: " + resp.Status
+	}
+	return trafficCheck{OK: ok, LatencyMS: lat, Bytes: len(body), ExitIP: exitIP, Detail: detail}, nil
 }
 
 // runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so
