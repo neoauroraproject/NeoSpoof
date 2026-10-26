@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.1.0"
+const version = "1.1.1"
 
 //go:embed web
 var webFS embed.FS
@@ -670,26 +670,26 @@ func binaryUint16(b [2]byte) uint16 {
 
 func printBanner(addr string, port int, password string, showPassword bool) {
 	fmt.Println()
-	fmt.Printf("  نئو اسپوف — پنل آماده است (نسخه %s)\n", version)
+	fmt.Printf("  NeoSpoof — panel ready (version %s)\n", version)
 	fmt.Println("  ────────────────────────────────────────")
 	if addr == "0.0.0.0" || addr == "" {
 		for _, ip := range bannerAddrs() {
-			fmt.Printf("  آدرس ورود:   http://%s/\n", net.JoinHostPort(ip, fmt.Sprint(port)))
+			fmt.Printf("  Login URL:   http://%s/\n", net.JoinHostPort(ip, fmt.Sprint(port)))
 		}
-		fmt.Printf("  آدرس محلی:   http://127.0.0.1:%d/\n", port)
+		fmt.Printf("  Local URL:   http://127.0.0.1:%d/\n", port)
 	} else {
-		fmt.Printf("  آدرس ورود:   http://%s/\n", net.JoinHostPort(addr, fmt.Sprint(port)))
+		fmt.Printf("  Login URL:   http://%s/\n", net.JoinHostPort(addr, fmt.Sprint(port)))
 	}
-	fmt.Println("  نام کاربری:  admin")
+	fmt.Println("  Username:    admin")
 	if showPassword {
-		fmt.Printf("  رمز عبور:    %s\n", password)
-		fmt.Println("  این رمز فقط همین یک‌بار نشان داده می‌شود.")
+		fmt.Printf("  Password:    %s\n", password)
+		fmt.Println("  This password is shown only once.")
 	} else {
-		fmt.Println("  رمز عبور:    همان رمز قبلی (ارتقا بدون تغییر داده)")
-		fmt.Println("  رمز جدید:    go run . --reset-password")
+		fmt.Println("  Password:    unchanged (upgraded in place, data kept)")
+		fmt.Println("  New password: run with --reset-password")
 	}
 	fmt.Println("  ────────────────────────────────────────")
-	fmt.Println("  تست واقعی بسته فقط روی لینوکس با sudo اجرا می‌شود.")
+	fmt.Println("  Real packet testing runs only on Linux with sudo.")
 	fmt.Println()
 }
 
