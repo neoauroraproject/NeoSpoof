@@ -34,7 +34,7 @@ allowed_peers   = {{pool}}
 tunnel_count    = 4
 mtu             = 1380
 initial_cwnd    = 10.0
-interface       = "eth0"
+interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
 
@@ -53,7 +53,7 @@ allowed_peers   = {{pool}}
 tunnel_count    = 4
 mtu             = 1380
 initial_cwnd    = 10.0
-interface       = "eth0"
+interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
 
@@ -93,6 +93,7 @@ func buildTunnelConfig(passing []string, peerReal, localReal string) (clientTOML
 		"id":          strconv.Itoa(id),
 		"psk":         psk,
 		"socks":       "1080",
+		"iface":       ifaceToward(peerReal),
 	}
 	meta = tunnelMeta{Primary: primary, Pool: passing, PeerReal: peerReal, LocalReal: localReal, DataPort: port, ICMPID: id, PSK: psk}
 	return fillTemplate(clientTmpl, kv), fillTemplate(serverTmpl, kv), meta, nil
@@ -153,6 +154,7 @@ func renderCandyPair(serverRealIP string, pool []string, socksPort int) (candyPa
 		"id":          strconv.Itoa(id),
 		"psk":         psk,
 		"socks":       strconv.Itoa(socksPort),
+		"iface":       ifaceToward(serverRealIP),
 	}
 	return candyPair{
 		ClientTOML: fillTemplate(clientTmpl, kv),
@@ -234,6 +236,45 @@ func setTOMLString(body, key, val string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// ifaceToward returns the local NIC name used to reach ipStr, or "eth0" when it
+// can't be determined (unspecified or unparseable address).
+func ifaceToward(ipStr string) string {
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil || ip.IsUnspecified() {
+		return "eth0"
+	}
+	return outboundInterface(ip)
+}
+
+// outboundInterface finds the network interface that owns the local source
+// address used to reach dst, so generated configs bind to the real NIC instead
+// of a hardcoded "eth0". Falls back to "eth0".
+func outboundInterface(dst net.IP) string {
+	local, err := outboundIP(dst)
+	if err != nil || local == nil {
+		return "eth0"
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "eth0"
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil && ipnet.IP.Equal(local) {
+				return iface.Name
+			}
+		}
+	}
+	return "eth0"
 }
 
 func fillTemplate(tmpl string, kv map[string]string) string {

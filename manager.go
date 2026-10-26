@@ -170,12 +170,14 @@ func (m *tunnelManager) importServer(name, pasted string) (tunnelDTO, error) {
 		return tunnelDTO{}, errInput("کانفیگ سرور معتبر نیست؛ کل دستور یا متن server.toml را بگذارید")
 	}
 	peer := tomlValue(body, "peer_real_ip")
-	// Set THIS server's own real_ip to the local address toward the client, so a
-	// config whose real_ip was guessed on the other side is corrected here.
+	// Set THIS server's own real_ip and interface to what reaches the client, so
+	// a config whose real_ip/interface was set on the other side is corrected
+	// here (the exit NIC is rarely the same name as the client's).
 	if ip := net.ParseIP(peer).To4(); ip != nil {
 		if out, err := outboundIP(ip); err == nil {
 			body = setTOMLString(body, "real_ip", out.String())
 		}
+		body = setTOMLString(body, "interface", outboundInterface(ip))
 	}
 	socks := 0
 	if v := tomlValue(body, "socks5_port"); v != "" {
