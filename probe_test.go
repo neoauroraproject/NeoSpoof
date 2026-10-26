@@ -42,6 +42,31 @@ func TestParseIPList(t *testing.T) {
 	}
 }
 
+func TestParseIPListRangesCIDR(t *testing.T) {
+	// Inclusive range (4), last-octet shorthand (4), CIDR /30 (4) = 12 addresses.
+	ips, bad := parseIPList("2.146.32.8-2.146.32.11\n2.180.31.240-243\n203.0.113.0/30")
+	if len(bad) != 0 {
+		t.Fatalf("unexpected bad: %#v", bad)
+	}
+	if len(ips) != 12 {
+		t.Fatalf("expected 12 addresses, got %d", len(ips))
+	}
+	if ips[0].String() != "2.146.32.8" || ips[3].String() != "2.146.32.11" {
+		t.Fatalf("range expansion wrong: %v", ips[:4])
+	}
+	if ips[4].String() != "2.180.31.240" || ips[6].String() != "2.180.31.242" {
+		t.Fatalf("shorthand expansion wrong: %v", ips[4:7])
+	}
+	// A reversed range is rejected; a huge CIDR is capped at the list limit.
+	if _, bad := parseIPList("10.0.0.5-10.0.0.1"); len(bad) != 1 {
+		t.Fatalf("reversed range should be bad: %#v", bad)
+	}
+	big, _ := parseIPList("1.0.0.0/8")
+	if len(big) != maxListIPs {
+		t.Fatalf("huge CIDR not capped: %d", len(big))
+	}
+}
+
 func TestSimpleVerdict(t *testing.T) {
 	canary := tally{preserved: 2, received: 2, wires: map[string]int{canaryIP: 2}}
 	code, _ := simpleVerdict(map[string]*tally{canaryIP: &canary}, 2, false, "")

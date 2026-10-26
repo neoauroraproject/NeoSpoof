@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -432,10 +433,30 @@ func dominantWire(h *tally) string {
 	return best
 }
 
+// parseIPList accepts single IPv4s, inclusive ranges ("a.b.c.d-e.f.g.h" or the
+// last-octet shorthand "a.b.c.d-e") and CIDR blocks ("x.y.z.0/24"), expanding
+// them to individual addresses. The whole result is capped at maxListIPs so a
+// big whitelist (ranges + CIDR) stays within the test's limit.
 func parseIPList(text string) ([]net.IP, []string) {
 	seen := map[string]struct{}{}
 	var ips []net.IP
 	var bad []string
+	add := func(ip net.IP) bool {
+		if len(ips) >= maxListIPs {
+			return false
+		}
+		ip = ip.To4()
+		if ip == nil || !validTestIP(ip) {
+			return true // skip silently; range/CIDR edges may hit reserved addrs
+		}
+		k := ip.String()
+		if _, ok := seen[k]; ok {
+			return true
+		}
+		seen[k] = struct{}{}
+		ips = append(ips, append(net.IP(nil), ip...))
+		return len(ips) < maxListIPs
+	}
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -449,19 +470,106 @@ func parseIPList(text string) ([]net.IP, []string) {
 			if chunk == "" {
 				continue
 			}
-			ip := net.ParseIP(chunk).To4()
-			if ip == nil || !validTestIP(ip) {
+			if len(ips) >= maxListIPs {
+				return ips, bad
+			}
+			var list []net.IP
+			ok := false
+			switch {
+			case strings.Contains(chunk, "/"):
+				list, ok = expandCIDR(chunk)
+			case strings.Contains(chunk, "-"):
+				list, ok = expandRange(chunk)
+			default:
+				// A single typed IP reports validTestIP failures as bad, so the
+				// operator sees a typo; range/CIDR edges are skipped silently.
+				ip := net.ParseIP(chunk).To4()
+				if ip == nil || !validTestIP(ip) {
+					bad = append(bad, chunk)
+					continue
+				}
+				list, ok = []net.IP{ip}, true
+			}
+			if !ok {
 				bad = append(bad, chunk)
 				continue
 			}
-			if _, ok := seen[ip.String()]; ok {
-				continue
+			for _, ip := range list {
+				if !add(ip) {
+					return ips, bad
+				}
 			}
-			seen[ip.String()] = struct{}{}
-			ips = append(ips, ip)
 		}
 	}
 	return ips, bad
+}
+
+// expandCIDR lists the addresses of an IPv4 CIDR block (capped at maxListIPs+1).
+func expandCIDR(s string) ([]net.IP, bool) {
+	_, ipnet, err := net.ParseCIDR(s)
+	if err != nil || ipnet.IP.To4() == nil {
+		return nil, false
+	}
+	var out []net.IP
+	for ip := ipnet.IP.Mask(ipnet.Mask).To4(); ip != nil && ipnet.Contains(ip); ip = nextIP(ip) {
+		out = append(out, append(net.IP(nil), ip...))
+		if len(out) > maxListIPs {
+			break
+		}
+	}
+	return out, true
+}
+
+// expandRange lists an inclusive IPv4 range, "a.b.c.d-e.f.g.h" or the
+// last-octet shorthand "a.b.c.d-e", capped at maxListIPs+1 addresses.
+func expandRange(s string) ([]net.IP, bool) {
+	i := strings.IndexByte(s, '-')
+	start := net.ParseIP(strings.TrimSpace(s[:i])).To4()
+	if start == nil {
+		return nil, false
+	}
+	endStr := strings.TrimSpace(s[i+1:])
+	var end net.IP
+	if strings.Contains(endStr, ".") {
+		end = net.ParseIP(endStr).To4()
+	} else if n, err := strconv.Atoi(endStr); err == nil && n >= 0 && n <= 255 {
+		end = net.IPv4(start[0], start[1], start[2], byte(n)).To4()
+	}
+	if end == nil {
+		return nil, false
+	}
+	su := binary.BigEndian.Uint32(start)
+	eu := binary.BigEndian.Uint32(end)
+	if eu < su {
+		return nil, false
+	}
+	if eu-su > maxListIPs {
+		eu = su + maxListIPs
+	}
+	var out []net.IP
+	for u := su; ; u++ {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], u)
+		out = append(out, net.IP(b[:]).To4())
+		if u == eu {
+			break
+		}
+	}
+	return out, true
+}
+
+func nextIP(ip net.IP) net.IP {
+	ip = ip.To4()
+	if ip == nil {
+		return nil
+	}
+	u := binary.BigEndian.Uint32(ip) + 1
+	if u == 0 {
+		return nil // wrapped past 255.255.255.255
+	}
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], u)
+	return net.IP(b[:]).To4()
 }
 
 func validTestIP(ip net.IP) bool {

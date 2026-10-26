@@ -369,6 +369,19 @@ $("suggest-ips").addEventListener("click", () => {
   $("list-ips").dispatchEvent(new Event("input"));
   toast("آی‌پی‌های پیشنهادی گذاشته شد", "info");
 });
+// Iran "white" source list — ranges and CIDR are expanded by the test (capped
+// at 1000). Served as a static asset so the big list stays out of the bundle.
+$("suggest-white").addEventListener("click", async () => {
+  const btn = $("suggest-white"); btn.disabled = true;
+  try {
+    const res = await fetch("iran-white.txt", { credentials: "same-origin" });
+    if (!res.ok) throw new Error("not ok");
+    $("list-ips").value = await res.text();
+    $("list-ips").dispatchEvent(new Event("input"));
+    toast("لیست وایت ایران گذاشته شد — رنج/CIDR پشتیبانی می‌شود (سقف ۱۰۰۰)", "info");
+  } catch (e) { toast("بارگیری لیست وایت ناموفق بود", "err"); }
+  finally { btn.disabled = false; }
+});
 
 /* ===== build tunnel from passing IPs ===== */
 function downloadText(text, name) {
