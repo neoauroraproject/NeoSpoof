@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 //go:embed web
 var webFS embed.FS
@@ -651,7 +651,7 @@ func binaryUint16(b [2]byte) uint16 {
 
 func printBanner(addr string, port int, password string, showPassword bool) {
 	fmt.Println()
-	fmt.Println("  پنل تست اسپوف آماده است")
+	fmt.Printf("  نئو اسپوف — پنل آماده است (نسخه %s)\n", version)
 	fmt.Println("  ────────────────────────────────────────")
 	if addr == "0.0.0.0" || addr == "" {
 		for _, ip := range bannerAddrs() {
@@ -666,7 +666,7 @@ func printBanner(addr string, port int, password string, showPassword bool) {
 		fmt.Printf("  رمز عبور:    %s\n", password)
 		fmt.Println("  این رمز فقط همین یک‌بار نشان داده می‌شود.")
 	} else {
-		fmt.Println("  رمز عبور:    همان رمز قبلی")
+		fmt.Println("  رمز عبور:    همان رمز قبلی (ارتقا بدون تغییر داده)")
 		fmt.Println("  رمز جدید:    go run . --reset-password")
 	}
 	fmt.Println("  ────────────────────────────────────────")
