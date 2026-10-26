@@ -87,6 +87,8 @@ function showLogin() {
   setError("pw-error", "");
   setError("login-error", "");
   stopPoll();
+  stopDash();
+  stopTunnels();
 }
 function showApp() {
   $("login-screen").hidden = true;
@@ -98,6 +100,8 @@ function showLicense(lic) {
   $("app").hidden = true;
   $("license-screen").hidden = false;
   stopPoll();
+  stopDash();
+  stopTunnels();
   const st = $("license-status");
   if (lic && lic.reason) { st.hidden = false; st.textContent = lic.reason; }
   else { st.hidden = true; }
@@ -106,7 +110,7 @@ function showLicense(lic) {
 }
 // gate decides which screen to show once we know the license state.
 function gate(me) {
-  if (me && me.license && me.license.active) { showApp(); return refresh(); }
+  if (me && me.license && me.license.active) { showApp(); selectView(state.view); return refresh(); }
   showLicense(me ? me.license : null);
 }
 
@@ -205,12 +209,15 @@ function selectView(view) {
     t.setAttribute("aria-selected", String(on));
     t.tabIndex = on ? 0 : -1;
   });
+  $("view-dash").hidden = view !== "dash";
   $("view-simple").hidden = view !== "simple";
   $("view-list").hidden = view !== "list";
   $("view-tunnels").hidden = view !== "tunnels";
   $("view-settings").hidden = view !== "settings";
   if (view === "tunnels") startTunnels();
   else stopTunnels();
+  if (view === "dash") startDash();
+  else stopDash();
 }
 tabs.forEach((btn, i) => {
   btn.addEventListener("click", () => selectView(btn.dataset.view));
@@ -375,44 +382,16 @@ function downloadText(text, name) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-$("build-tunnel").addEventListener("click", async () => {
-  const btn = $("build-tunnel");
-  btn.disabled = true;
-  try {
-    const t = await api("/api/tunnel");
-    $("tunnel-client").value = t.client || "";
-    $("tunnel-server").value = t.server || "";
-    const m = t.meta || {};
-    const dl = $("tunnel-meta");
-    dl.replaceChildren();
-    const add = (k, v, breakAll) => {
-      const dt = document.createElement("dt"); dt.textContent = k;
-      const dd = document.createElement("dd"); dd.textContent = v; dd.className = "ltr";
-      if (breakAll) dd.style.wordBreak = "break-all";
-      dl.append(dt, dd);
-    };
-    add("آی‌پی اصلی", m.primary || "—");
-    add("تعداد آی‌پی باز", fa((m.pool || []).length));
-    add("IP سرور (این دستگاه)", m.real_ip || "—");
-    add("IP کلاینت (فرستنده)", m.peer_real_ip || "—");
-    add("پورت داده", fa(m.data_port || 0));
-    add("‏ICMP id", fa(m.icmp_id || 0));
-    add("کلید مشترک", m.pre_shared_key || "—", true);
-    $("tunnel-card").hidden = false;
-    $("tunnel-card").scrollIntoView({ behavior: "smooth", block: "start" });
-    toast("تانل ساخته و ذخیره شد", "ok");
-  } catch (err) {
-    toast(err.message, "err");
-  } finally {
-    btn.disabled = false;
-  }
-});
-$("tunnel-close").addEventListener("click", () => { $("tunnel-card").hidden = true; });
-$("tunnel-card").addEventListener("click", async (e) => {
-  const c = e.target.closest("[data-copy]");
-  if (c) { const ok = await copyText($(c.dataset.copy).value); toast(ok ? "کپی شد" : "کپی نشد", ok ? "ok" : "err"); return; }
-  const d = e.target.closest("[data-dl]");
-  if (d) { downloadText($(d.dataset.dl).value, d.dataset.name); }
+// Carry the passing IPs into the Tunnels tab, where one click builds a managed
+// tunnel (client runs here) and hands back a single server command — no loose
+// client.toml/server.toml files.
+$("build-tunnel").addEventListener("click", () => {
+  const ips = ((state.last && state.last.rows) || []).filter((r) => r.status === "passed").map((r) => r.ip);
+  if (!ips.length) { toast("آی‌پی بازی برای تانل نیست", "err"); return; }
+  $("tn-ips").value = ips.join("\n");
+  selectView("tunnels");
+  toast("آی‌پی‌های باز منتقل شد — نام و آی‌پی مقصد را بزن و «افزودن تانل»", "info");
+  $("tn-name").focus();
 });
 
 /* ===== settings: probe params ===== */
@@ -615,7 +594,6 @@ function draw(mode, s) {
       $("copy-open").hidden = true;
       $("export-csv").hidden = true;
       $("build-tunnel").hidden = true;
-      $("tunnel-card").hidden = true;
     }
     return;
   }
@@ -849,10 +827,77 @@ $("tn-logs-close").addEventListener("click", () => {
   clearInterval(tn.logsTimer); tn.logsTimer = 0;
 });
 
+/* ===== dashboard (home) ===== */
+const dash = { listTimer: 0, checkTimer: 0 };
+function startDash() {
+  loadDash();
+  if (!dash.listTimer) dash.listTimer = setInterval(loadDash, 4000);
+  runDashChecks();
+  if (!dash.checkTimer) dash.checkTimer = setInterval(runDashChecks, 20000);
+}
+function stopDash() {
+  clearInterval(dash.listTimer); dash.listTimer = 0;
+  clearInterval(dash.checkTimer); dash.checkTimer = 0;
+}
+async function loadDash() {
+  if (document.hidden) return;
+  try { const d = await api("/api/tunnels"); renderDash(d.tunnels || []); } catch (e) { /* 401/403 handled */ }
+}
+function renderDash(list) {
+  const running = list.filter((t) => t.status === "running");
+  $("st-total").textContent = fa(list.length);
+  $("st-active").textContent = fa(running.length);
+  $("st-proxies").textContent = fa(running.length);
+  const lats = [];
+  list.forEach((t) => { const c = tn.checks[t.id]; if (c && c.ok && c.latency_ms) lats.push(c.latency_ms); });
+  $("st-lat").textContent = lats.length ? fa(Math.round(lats.reduce((a, b) => a + b, 0) / lats.length)) + "ms" : "—";
+
+  const box = $("dash-list");
+  box.replaceChildren();
+  if (!list.length) {
+    const p = document.createElement("p"); p.className = "muted";
+    p.textContent = "هنوز تانلی ساخته نشده. از تب «تانل‌ها» یک لوکیشن اضافه کن.";
+    box.appendChild(p);
+    return;
+  }
+  list.forEach((t) => {
+    const row = document.createElement("div"); row.className = "dash-row";
+    const head = document.createElement("div"); head.className = "row";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = t.name || ("#" + t.id);
+    const badge = document.createElement("span"); badge.className = "badge st-" + t.status; badge.textContent = TN_STATUS[t.status] || t.status;
+    head.append(name, badge);
+    const meta = document.createElement("div"); meta.className = "meta";
+    const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
+    meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
+    const c = tn.checks[t.id];
+    if (c) {
+      const e = document.createElement("span");
+      e.style.color = c.ok ? "var(--ok)" : "var(--bad)";
+      e.textContent = c.ok ? ("عبور ✓ " + fa(c.latency_ms) + "ms" + (c.exit_ip ? " · خروجی " + c.exit_ip : "")) : ("عبور ✗ " + (c.detail || ""));
+      meta.append(e);
+    } else if (t.status === "running") {
+      const e = document.createElement("span"); e.className = "muted"; e.textContent = "در حال بررسی عبور…"; meta.append(e);
+    }
+    row.append(head, meta);
+    box.appendChild(row);
+  });
+}
+async function runDashChecks() {
+  if (document.hidden) return;
+  let list = [];
+  try { const d = await api("/api/tunnels"); list = d.tunnels || []; } catch (e) { return; }
+  for (const t of list.filter((x) => x.status === "running")) {
+    try { tn.checks[t.id] = await api("/api/tunnels/check", { method: "POST", body: { id: t.id } }); }
+    catch (e) { /* ignore a single failed check */ }
+  }
+  renderDash(list);
+}
+$("dash-refresh").addEventListener("click", () => { runDashChecks(); toast("بررسی عبور شروع شد", "info"); });
+
 /* ===== boot ===== */
 applyRole("simple");
 applyRole("list");
-selectView("simple");
+selectView("dash");
 api("/api/me")
   .then((me) => { applyMe(me); gate(me); })
   .catch(() => showLogin());

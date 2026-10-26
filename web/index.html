@@ -67,7 +67,10 @@
         <span id="ver" class="ver" hidden></span>
       </div>
       <nav class="nav" role="tablist" aria-label="بخش‌ها">
-        <button class="navitem" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="true" aria-controls="view-simple">
+        <button class="navitem" type="button" role="tab" id="tab-dash" data-view="dash" aria-selected="true" aria-controls="view-dash">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>داشبورد</span>
+        </button>
+        <button class="navitem" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="false" aria-controls="view-simple" tabindex="-1">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg><span>تست ساده</span>
         </button>
         <button class="navitem" type="button" role="tab" id="tab-list" data-view="list" aria-selected="false" aria-controls="view-list" tabindex="-1">
@@ -105,8 +108,26 @@
         <span id="cap-text"></span>
       </div>
 
+      <!-- Dashboard -->
+      <section id="view-dash" class="panel" role="tabpanel" aria-labelledby="tab-dash" tabindex="0">
+        <div class="stat-grid">
+          <div class="stat-card"><span class="stat-label">کل تانل‌ها</span><span id="st-total" class="stat-num">۰</span><span class="stat-sub">لوکیشن‌های ساخته‌شده</span></div>
+          <div class="stat-card accent-ok"><span class="stat-label">فعال</span><span id="st-active" class="stat-num">۰</span><span class="stat-sub">در حال اجرا</span></div>
+          <div class="stat-card accent-purple"><span class="stat-label">پروکسی SOCKS</span><span id="st-proxies" class="stat-num">۰</span><span class="stat-sub">پورت‌های محلی فعال</span></div>
+          <div class="stat-card accent-orange"><span class="stat-label">میانگین تأخیر</span><span id="st-lat" class="stat-num">—</span><span class="stat-sub">عبور از مسیر SOCKS</span></div>
+        </div>
+        <section class="card stack">
+          <div class="row spread">
+            <h2>ترافیک تانل‌ها</h2>
+            <button id="dash-refresh" class="ghost" type="button">بررسی عبور همه</button>
+          </div>
+          <p class="muted lead">وضعیت زندهٔ عبور ترافیک از مسیر SOCKS هر تانل. تانل‌های فعال هر چند ثانیه یک‌بار خودکار بررسی می‌شوند و تأخیر و آی‌پی خروجی نمایش داده می‌شود.</p>
+          <div id="dash-list" aria-live="polite"></div>
+        </section>
+      </section>
+
       <!-- Simple -->
-      <section id="view-simple" class="panel" role="tabpanel" aria-labelledby="tab-simple" tabindex="0">
+      <section id="view-simple" class="panel" role="tabpanel" aria-labelledby="tab-simple" tabindex="0" hidden>
         <div class="card stack">
           <h2>تست ساده</h2>
           <p class="muted lead">وقتی مسیر عادی برقرار است، فقط آی‌پی سرور مقصد را بزنید. پنل هشت بسته با سورس <span class="ltr">192.0.2.1</span> می‌فرستد تا معلوم شود اسپوف باز است یا نه.</p>
@@ -155,34 +176,11 @@
             <button id="list-stop" class="ghost" type="button" hidden>توقف</button>
             <button id="copy-open" class="primary" type="button" hidden>کپی آی‌پی‌های باز</button>
             <button id="export-csv" class="ghost" type="button" hidden>خروجی CSV</button>
-            <button id="build-tunnel" class="primary" type="button" hidden>ساخت تانل از آی‌پی‌های باز</button>
+            <button id="build-tunnel" class="primary" type="button" hidden>ساخت تانل از این آی‌پی‌ها</button>
           </div>
           <p id="list-error" class="alert" role="alert" hidden></p>
         </div>
         <section id="list-result" class="card stack"></section>
-
-        <section id="tunnel-card" class="card stack" hidden>
-          <div class="row spread">
-            <h2>تانل آماده</h2>
-            <button id="tunnel-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button>
-          </div>
-          <p class="muted lead">از آی‌پی‌هایی که سالم رسیدند یک جفت کانفیگ کلاینت/سرور ساخته شد و کنار داده‌های پنل ذخیره شد. کلید و پورت‌ها در هر دو طرف یکسان‌اند.</p>
-          <dl id="tunnel-meta" class="kv"></dl>
-          <label>کلاینت — <span class="ltr">client.toml</span>
-            <textarea id="tunnel-client" class="ltr" readonly rows="8"></textarea>
-          </label>
-          <div class="actions">
-            <button class="ghost" type="button" data-copy="tunnel-client">کپی کلاینت</button>
-            <button class="ghost" type="button" data-dl="tunnel-client" data-name="client.toml">دانلود client.toml</button>
-          </div>
-          <label>سرور — <span class="ltr">server.toml</span>
-            <textarea id="tunnel-server" class="ltr" readonly rows="8"></textarea>
-          </label>
-          <div class="actions">
-            <button class="ghost" type="button" data-copy="tunnel-server">کپی سرور</button>
-            <button class="ghost" type="button" data-dl="tunnel-server" data-name="server.toml">دانلود server.toml</button>
-          </div>
-        </section>
       </section>
 
       <!-- Tunnels -->
