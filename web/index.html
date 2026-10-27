@@ -109,30 +109,46 @@
 
       <!-- Dashboard -->
       <section id="view-dash" class="panel" role="tabpanel" aria-labelledby="tab-dash" tabindex="0">
+        <div class="stat-grid">
+          <div class="stat-card"><span class="stat-label">کل تانل‌ها</span><span id="st-total" class="stat-num">۰</span><span class="stat-sub">لوکیشن‌های ساخته‌شده</span></div>
+          <div class="stat-card accent-ok"><span class="stat-label">فعال</span><span id="st-active" class="stat-num">۰</span><span class="stat-sub">در حال اجرا</span></div>
+          <div class="stat-card accent-purple"><span class="stat-label">پروکسی SOCKS</span><span id="st-proxies" class="stat-num">۰</span><span class="stat-sub">پورت‌های محلی فعال</span></div>
+          <div class="stat-card accent-orange"><span class="stat-label">میانگین تأخیر</span><span id="st-lat" class="stat-num">—</span><span class="stat-sub">عبور از مسیر SOCKS</span></div>
+        </div>
+
+        <section class="card stack">
+          <div class="row spread">
+            <h2>ترافیک تانل‌ها</h2>
+            <div class="row">
+              <button id="dash-refresh" class="ghost" type="button">بررسی عبور همه</button>
+              <button id="dash-speed" class="ghost" type="button">تست سرعت همه</button>
+            </div>
+          </div>
+          <p class="muted lead">جدول زندهٔ هر تانل: وضعیت عبور از مسیر SOCKS، تأخیر، سرعت (با «تست سرعت») و آی‌پی خروجی. تانل‌های «سرور» پروکسی ندارند و عبور/سرعت برایشان بی‌معناست.</p>
+          <div id="dash-list" aria-live="polite"></div>
+        </section>
+
         <div class="card stack">
           <div class="row spread">
-            <h2>این سرور</h2>
+            <h2>سرورها</h2>
             <span id="site-badge" class="badge" hidden></span>
           </div>
-          <p class="muted lead">مشخص کن این پنل روی سرور <b>ایران (مبدأ)</b> است یا <b>خارج (اکسیت)</b>، و یک نام بده تا سرورها را از هم تشخیص بدهی. خارج‌ها می‌توانند چندتا و با نام‌های مختلف باشند.</p>
+          <p class="muted lead">نقش و نام <b>این</b> سرور را تعیین کن (ایران یا خارج)، و سرورهای دیگرت را ثبت کن تا موقع تست و ساخت تانل به‌جای تایپ آی‌پی انتخابشان کنی.</p>
           <div class="grid2">
-            <label>نقش این سرور
+            <label>این سرور کجاست؟
               <select id="site-role">
                 <option value="">— انتخاب کنید —</option>
                 <option value="source">ایران (مبدأ)</option>
                 <option value="exit">خارج (اکسیت)</option>
               </select>
             </label>
-            <label>نام / برچسب
-              <input id="site-name" type="text" maxlength="60" placeholder="مثلاً ایران-۱ یا آلمان-۳">
+            <label>نام این سرور
+              <input id="site-name" type="text" maxlength="60" placeholder="مثلاً ایران-۱">
             </label>
           </div>
-          <div class="actions"><button id="site-save" class="cta" type="button">ذخیره</button></div>
-        </div>
-
-        <div class="card stack">
-          <h2>سرورها</h2>
-          <p class="muted lead">سرورهای ایران و خارج را یک‌بار اینجا ثبت کن؛ موقع تست و ساخت تانل به‌جای تایپ آی‌پی از همین‌ها انتخاب می‌کنی. خارج‌ها می‌توانند چندتا باشند.</p>
+          <div class="actions"><button id="site-save" class="ghost" type="button">ذخیره هویت این سرور</button></div>
+          <div class="sep"></div>
+          <p class="muted">افزودن سرور دیگر به لیست انتخاب:</p>
           <div class="grid2">
             <label>نام سرور
               <input id="peer-name" type="text" placeholder="مثلاً آلمان-۱">
@@ -151,24 +167,6 @@
           <div class="actions"><button id="peer-add" class="cta" type="button">افزودن سرور</button></div>
           <div id="peer-list" aria-live="polite"></div>
         </div>
-
-        <div class="stat-grid">
-          <div class="stat-card"><span class="stat-label">کل تانل‌ها</span><span id="st-total" class="stat-num">۰</span><span class="stat-sub">لوکیشن‌های ساخته‌شده</span></div>
-          <div class="stat-card accent-ok"><span class="stat-label">فعال</span><span id="st-active" class="stat-num">۰</span><span class="stat-sub">در حال اجرا</span></div>
-          <div class="stat-card accent-purple"><span class="stat-label">پروکسی SOCKS</span><span id="st-proxies" class="stat-num">۰</span><span class="stat-sub">پورت‌های محلی فعال</span></div>
-          <div class="stat-card accent-orange"><span class="stat-label">میانگین تأخیر</span><span id="st-lat" class="stat-num">—</span><span class="stat-sub">عبور از مسیر SOCKS</span></div>
-        </div>
-        <section class="card stack">
-          <div class="row spread">
-            <h2>ترافیک تانل‌ها</h2>
-            <div class="row">
-              <button id="dash-refresh" class="ghost" type="button">بررسی عبور همه</button>
-              <button id="dash-speed" class="ghost" type="button">تست سرعت همه</button>
-            </div>
-          </div>
-          <p class="muted lead">جدول زندهٔ هر تانل: وضعیت عبور از مسیر SOCKS، تأخیر، سرعت (با «تست سرعت») و آی‌پی خروجی. عبور هر چند ثانیه یک‌بار خودکار بررسی می‌شود. تانل‌های «سرور» پروکسی ندارند و عبور/سرعت برایشان بی‌معناست.</p>
-          <div id="dash-list" aria-live="polite"></div>
-        </section>
       </section>
 
       <!-- Simple -->
