@@ -21,15 +21,27 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)"; exit 1 ;;
 esac
 
+# fetch_bin <url> <dest>: download to a temp beside dest, then atomically rename
+# into place. This replaces even a binary that is currently running (busy): the
+# running process keeps the old file until it restarts, so re-installs never hit
+# "Text file busy".
+fetch_bin() {
+  _tmp="$(mktemp "${2}.XXXXXX")" || return 1
+  if curl -fL "$1" -o "$_tmp"; then
+    chmod 0755 "$_tmp"
+    mv -f "$_tmp" "$2"
+    return 0
+  fi
+  rm -f "$_tmp"
+  return 1
+}
+
 url="https://github.com/${repo}/releases/latest/download/${asset}"
 echo "Downloading ${asset} ..."
-tmp="$(mktemp)"
-if ! curl -fL "$url" -o "$tmp"; then
+if ! fetch_bin "$url" "$dest"; then
   echo "Binary download failed. Has a release been published? (${url})"
-  rm -f "$tmp"; exit 1
+  exit 1
 fi
-install -m 0755 "$tmp" "$dest"
-rm -f "$tmp"
 mkdir -p "$datadir"
 echo "Installed: ${dest}"
 
@@ -39,8 +51,7 @@ coreflags=""
 case "$(uname -m)" in
   x86_64|amd64)
     for c in client server; do
-      if curl -fL "https://github.com/${repo}/releases/latest/download/neospoof-${c}-linux-amd64" -o "/usr/local/bin/neospoof-${c}"; then
-        chmod 0755 "/usr/local/bin/neospoof-${c}"
+      if fetch_bin "https://github.com/${repo}/releases/latest/download/neospoof-${c}-linux-amd64" "/usr/local/bin/neospoof-${c}"; then
         echo "Installed core: /usr/local/bin/neospoof-${c}"
       else
         echo "Warning: could not download the ${c} core (is it in the latest release?)."

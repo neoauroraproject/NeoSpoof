@@ -304,6 +304,23 @@
             <input id="set-pps" type="number" class="ltr" min="1" max="500" step="1" inputmode="numeric">
             <span class="hint">بین ۱ تا ۵۰۰. نرخ بالاتر تست را سریع‌تر ولی پرسروصداتر می‌کند.</span>
           </label>
+          <div class="sep"></div>
+          <h3>تنظیمات تانل (سرعت و پایداری)</h3>
+          <p class="muted">روی کانفیگِ تانل‌های جدید اعمال می‌شوند.</p>
+          <div class="grid2">
+            <label>تعداد تانل موازی
+              <input id="set-tcount" type="number" class="ltr" min="1" max="16" step="1" inputmode="numeric">
+              <span class="hint">بیشتر = موازی‌سازی و سرعت بالاتر (۱ تا ۱۶).</span>
+            </label>
+            <label>MTU
+              <input id="set-mtu" type="number" class="ltr" min="576" max="1500" step="10" inputmode="numeric">
+              <span class="hint">بار هر بسته (۵۷۶ تا ۱۵۰۰). با path MTU تنظیم کن تا تکه‌شدن کم شود.</span>
+            </label>
+            <label>پنجرهٔ ازدحام اولیه
+              <input id="set-cwnd" type="number" class="ltr" min="1" max="200" step="1" inputmode="numeric">
+              <span class="hint">بالاتر = گرم‌شدن سریع‌تر روی لینک کم‌تأخیر (۱ تا ۲۰۰).</span>
+            </label>
+          </div>
           <p id="probe-error" class="alert" role="alert" hidden></p>
           <div class="actions"><button class="cta" type="submit">ذخیره تنظیمات</button></div>
         </form>

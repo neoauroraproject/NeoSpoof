@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.5.1"
+const version = "1.6.0"
 
 //go:embed web
 var webFS embed.FS
@@ -236,6 +236,9 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"packets_per_sec": cfg.PacketsPerSec,
 		"site_role":       cfg.SiteRole,
 		"site_name":       cfg.SiteName,
+		"tunnel_count":    cfg.TunnelCount,
+		"mtu":             cfg.MTU,
+		"initial_cwnd":    cfg.InitialCwnd,
 		"license":         s.license.status(),
 	})
 }
@@ -402,7 +405,7 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "آی‌پی اسپوف لازم است؛ اول تست کنید یا دستی وارد کنید")
 			return
 		}
-		pair, err := renderCandyPair(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
+		pair, err := renderCandyPair(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort, s.settings.get())
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -692,7 +695,7 @@ func (s *server) handleTunnel(w http.ResponseWriter, r *http.Request) {
 			localReal = out.String()
 		}
 	}
-	clientTOML, serverTOML, meta, err := buildTunnelConfig(passing, senderReal, localReal)
+	clientTOML, serverTOML, meta, err := buildTunnelConfig(passing, senderReal, localReal, s.settings.get())
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

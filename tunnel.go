@@ -31,9 +31,9 @@ data_port       = {{port}}
 icmp_id         = {{id}}
 pre_shared_key  = "{{psk}}"
 allowed_peers   = {{pool}}
-tunnel_count    = 4
-mtu             = 1380
-initial_cwnd    = 30.0
+tunnel_count    = {{tcount}}
+mtu             = {{mtu}}
+initial_cwnd    = {{cwnd}}
 interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
@@ -50,9 +50,9 @@ data_port       = {{port}}
 icmp_id         = {{id}}
 pre_shared_key  = "{{psk}}"
 allowed_peers   = {{pool}}
-tunnel_count    = 4
-mtu             = 1380
-initial_cwnd    = 30.0
+tunnel_count    = {{tcount}}
+mtu             = {{mtu}}
+initial_cwnd    = {{cwnd}}
 interface       = "{{iface}}"
 socks5_port     = {{socks}}
 `
@@ -60,7 +60,7 @@ socks5_port     = {{socks}}
 // buildTunnelConfig turns the spoofed IPs that passed into a matched client and
 // server config pair. peerReal is the sender's real IP (the tunnel client), and
 // localReal is this machine's real IP (the tunnel server).
-func buildTunnelConfig(passing []string, peerReal, localReal string) (clientTOML, serverTOML string, meta tunnelMeta, err error) {
+func buildTunnelConfig(passing []string, peerReal, localReal string, set settings) (clientTOML, serverTOML string, meta tunnelMeta, err error) {
 	if len(passing) == 0 {
 		return "", "", tunnelMeta{}, errInput("هیچ آی‌پی سالمی برای ساخت تانل نیست")
 	}
@@ -94,6 +94,9 @@ func buildTunnelConfig(passing []string, peerReal, localReal string) (clientTOML
 		"psk":         psk,
 		"socks":       "1080",
 		"iface":       ifaceToward(peerReal),
+		"tcount":      strconv.Itoa(set.TunnelCount),
+		"mtu":         strconv.Itoa(set.MTU),
+		"cwnd":        strconv.FormatFloat(set.InitialCwnd, 'f', 1, 64),
 	}
 	meta = tunnelMeta{Primary: primary, Pool: passing, PeerReal: peerReal, LocalReal: localReal, DataPort: port, ICMPID: id, PSK: psk}
 	return fillTemplate(clientTmpl, kv), fillTemplate(serverTmpl, kv), meta, nil
@@ -120,7 +123,7 @@ type candyPair struct {
 // this machine is the client, serverRealIP is the exit server that runs the
 // server side, pool is the spoofed source IPs (the ones that passed the test),
 // and socksPort is this tunnel's own local SOCKS5 port.
-func renderCandyPair(serverRealIP string, pool []string, socksPort int) (candyPair, error) {
+func renderCandyPair(serverRealIP string, pool []string, socksPort int, set settings) (candyPair, error) {
 	if len(pool) == 0 {
 		return candyPair{}, errInput("لیست آی‌پی اسپوف خالی است")
 	}
@@ -155,6 +158,9 @@ func renderCandyPair(serverRealIP string, pool []string, socksPort int) (candyPa
 		"psk":         psk,
 		"socks":       strconv.Itoa(socksPort),
 		"iface":       ifaceToward(serverRealIP),
+		"tcount":      strconv.Itoa(set.TunnelCount),
+		"mtu":         strconv.Itoa(set.MTU),
+		"cwnd":        strconv.FormatFloat(set.InitialCwnd, 'f', 1, 64),
 	}
 	return candyPair{
 		ClientTOML: fillTemplate(clientTmpl, kv),

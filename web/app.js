@@ -423,12 +423,19 @@ $("probe-form").addEventListener("submit", async (ev) => {
   btn.disabled = true;
   setError("probe-error", "");
   try {
-    const saved = await api("/api/settings", { method: "POST", body: {
+    const cur = await api("/api/settings");
+    const saved = await api("/api/settings", { method: "POST", body: Object.assign({}, cur, {
       listen_seconds: parseInt($("set-listen").value, 10) || 0,
-      packets_per_sec: parseInt($("set-pps").value, 10) || 0
-    }});
+      packets_per_sec: parseInt($("set-pps").value, 10) || 0,
+      tunnel_count: parseInt($("set-tcount").value, 10) || 0,
+      mtu: parseInt($("set-mtu").value, 10) || 0,
+      initial_cwnd: parseFloat($("set-cwnd").value) || 0
+    })});
     $("set-listen").value = saved.listen_seconds;
     $("set-pps").value = saved.packets_per_sec;
+    $("set-tcount").value = saved.tunnel_count;
+    $("set-mtu").value = saved.mtu;
+    $("set-cwnd").value = saved.initial_cwnd;
     toast("تنظیمات ذخیره شد", "ok");
   } catch (err) {
     setError("probe-error", err.message);
@@ -465,6 +472,9 @@ function applyMe(me) {
   if (me.version) { $("ver").textContent = "v" + me.version; $("ver").hidden = false; }
   $("set-listen").value = me.listen_seconds;
   $("set-pps").value = me.packets_per_sec;
+  if ("tunnel_count" in me) $("set-tcount").value = me.tunnel_count;
+  if ("mtu" in me) $("set-mtu").value = me.mtu;
+  if ("initial_cwnd" in me) $("set-cwnd").value = me.initial_cwnd;
   lastLicense = me.license || null;
   const tp = $("trial-pill");
   if (lastLicense && lastLicense.trial) {

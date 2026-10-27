@@ -21,7 +21,7 @@ func seedReceiver(dir string) *server {
 	}
 	p.senderReal = "203.0.113.5"
 	lic := &licenseManager{claims: &tokenClaims{Plan: "pro", ExpiresAt: time.Now().Add(time.Hour).Unix()}}
-	return &server{probe: p, dataDir: dir, license: lic}
+	return &server{probe: p, dataDir: dir, license: lic, settings: &settingsStore{cur: defaultSettings()}}
 }
 
 func TestHandleTunnel(t *testing.T) {

@@ -29,6 +29,7 @@ type tunnelConf struct {
 	TOML       string `json:"toml"`                 // the config this tunnel's core runs
 	ServerTOML string `json:"server_toml"`          // matched exit-server config (client tunnels only)
 	Role       string `json:"role,omitempty"`       // "" = client (default), "server" = imported exit server
+	Running    bool   `json:"running,omitempty"`    // desired state: start it on boot and keep it up
 }
 
 type tunnelInstance struct {
@@ -81,7 +82,25 @@ func openManager(dir, corePath, serverCorePath string) (*tunnelManager, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	go m.autostart()
 	return m, nil
+}
+
+// autostart brings up every tunnel whose desired state is Running, so tunnels
+// survive a panel restart (e.g. an in-place update) without a manual start.
+func (m *tunnelManager) autostart() {
+	m.mu.Lock()
+	var ids []int
+	for id, in := range m.inst {
+		if in.conf.Running && in.status != "running" {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	sort.Ints(ids)
+	for _, id := range ids {
+		_ = m.start(id)
+	}
 }
 
 func (m *tunnelManager) saveLocked() error {
@@ -263,6 +282,8 @@ func (m *tunnelManager) start(id int) error {
 	in.status = "running"
 	in.errText = ""
 	in.started = time.Now()
+	in.conf.Running = true // desired: keep it up, restart on boot
+	_ = m.saveLocked()
 	m.mu.Unlock()
 
 	go m.pump(id, stdout)
@@ -270,11 +291,12 @@ func (m *tunnelManager) start(id int) error {
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		cur := m.inst[id]
 		if cur == nil || cur.cmd != cmd {
-			return // replaced by a newer run
+			m.mu.Unlock()
+			return // replaced by a newer run, or user stopped it
 		}
+		ranOK := time.Since(cur.started) > 5*time.Second
 		if err != nil && cur.status == "running" {
 			cur.status = "error"
 			cur.errText = "هسته متوقف شد: " + err.Error()
@@ -282,6 +304,14 @@ func (m *tunnelManager) start(id int) error {
 			cur.status = "stopped"
 		}
 		cur.cmd = nil
+		wantUp := cur.conf.Running // still desired?
+		m.mu.Unlock()
+		// Self-heal a crashed-but-wanted tunnel, but only if it had run for a
+		// while (so a config/binary that fails instantly does not spin).
+		if wantUp && err != nil && ranOK {
+			time.Sleep(3 * time.Second)
+			_ = m.start(id)
+		}
 	}()
 	return nil
 }
@@ -315,6 +345,8 @@ func (m *tunnelManager) stop(id int) error {
 		in.status = "stopped"
 		in.cmd = nil
 	}
+	in.conf.Running = false // user stop clears the desired state (no auto-restart)
+	_ = m.saveLocked()
 	m.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Kill()

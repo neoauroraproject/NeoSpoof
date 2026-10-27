@@ -15,6 +15,16 @@ const (
 	maxListenSeconds     = 900
 	minPPS               = 1
 	maxPPS               = 500
+
+	defaultTunnelCount = 4
+	minTunnelCount     = 1
+	maxTunnelCount     = 16
+	defaultMTU         = 1380
+	minMTU             = 576
+	maxMTU             = 1500
+	defaultCwnd        = 30.0
+	minCwnd            = 1.0
+	maxCwnd            = 200.0
 )
 
 // settings holds the tunable probe parameters the panel exposes, plus this
@@ -25,6 +35,11 @@ type settings struct {
 	PacketsPerSec int    `json:"packets_per_sec"`
 	SiteRole      string `json:"site_role"` // "", "source" (ایران/مبدأ), or "exit" (خارج)
 	SiteName      string `json:"site_name"` // free label, e.g. "ایران-۱" or "آلمان-۳"
+
+	// Tunnel tuning, written into every generated config.
+	TunnelCount int     `json:"tunnel_count"` // parallel tunnels
+	MTU         int     `json:"mtu"`          // max payload bytes per packet
+	InitialCwnd float64 `json:"initial_cwnd"` // initial congestion window
 }
 
 type settingsStore struct {
@@ -34,7 +49,23 @@ type settingsStore struct {
 }
 
 func defaultSettings() settings {
-	return settings{ListenSeconds: defaultListenSeconds, PacketsPerSec: defaultPPS}
+	return settings{
+		ListenSeconds: defaultListenSeconds, PacketsPerSec: defaultPPS,
+		TunnelCount: defaultTunnelCount, MTU: defaultMTU, InitialCwnd: defaultCwnd,
+	}
+}
+
+func clampInt(v, def, lo, hi int) int {
+	if v == 0 {
+		v = def
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // clamp keeps the values inside the supported range, filling zeros with defaults.
@@ -62,6 +93,17 @@ func (s settings) clamp() settings {
 	}
 	if len(s.SiteName) > 60 {
 		s.SiteName = s.SiteName[:60]
+	}
+	s.TunnelCount = clampInt(s.TunnelCount, defaultTunnelCount, minTunnelCount, maxTunnelCount)
+	s.MTU = clampInt(s.MTU, defaultMTU, minMTU, maxMTU)
+	if s.InitialCwnd == 0 {
+		s.InitialCwnd = defaultCwnd
+	}
+	if s.InitialCwnd < minCwnd {
+		s.InitialCwnd = minCwnd
+	}
+	if s.InitialCwnd > maxCwnd {
+		s.InitialCwnd = maxCwnd
 	}
 	return s
 }

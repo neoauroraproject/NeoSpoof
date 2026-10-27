@@ -7,7 +7,7 @@ import (
 
 func TestBuildTunnelConfig(t *testing.T) {
 	passing := []string{"8.8.8.8", "1.1.1.1", "9.9.9.9"}
-	client, server, meta, err := buildTunnelConfig(passing, "203.0.113.5", "198.51.100.9")
+	client, server, meta, err := buildTunnelConfig(passing, "203.0.113.5", "198.51.100.9", defaultSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,14 +40,14 @@ func TestBuildTunnelConfig(t *testing.T) {
 		t.Fatal("unfilled template marker remains")
 	}
 	// No passing IPs must be rejected.
-	if _, _, _, err := buildTunnelConfig(nil, "", ""); err == nil {
+	if _, _, _, err := buildTunnelConfig(nil, "", "", defaultSettings()); err == nil {
 		t.Fatal("expected error for empty passing set")
 	}
 }
 
 func TestRenderCandyPair(t *testing.T) {
 	pool := []string{"8.8.8.8", "1.1.1.1"}
-	pair, err := renderCandyPair("203.0.113.7", pool, 1081)
+	pair, err := renderCandyPair("203.0.113.7", pool, 1081, defaultSettings())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestRenderCandyPair(t *testing.T) {
 		t.Fatal("unfilled template marker remains")
 	}
 	// Empty pool is rejected.
-	if _, err := renderCandyPair("203.0.113.7", nil, 1080); err == nil {
+	if _, err := renderCandyPair("203.0.113.7", nil, 1080, defaultSettings()); err == nil {
 		t.Fatal("expected error for empty pool")
 	}
 
