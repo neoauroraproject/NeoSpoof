@@ -71,11 +71,8 @@
         <button class="navitem" type="button" role="tab" id="tab-dash" data-view="dash" aria-selected="true" aria-controls="view-dash">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span>داشبورد</span>
         </button>
-        <button class="navitem" type="button" role="tab" id="tab-simple" data-view="simple" aria-selected="false" aria-controls="view-simple" tabindex="-1">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg><span>تست ساده</span>
-        </button>
-        <button class="navitem" type="button" role="tab" id="tab-list" data-view="list" aria-selected="false" aria-controls="view-list" tabindex="-1">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span>تست لیست</span>
+        <button class="navitem" type="button" role="tab" id="tab-test" data-view="test" aria-selected="false" aria-controls="view-test" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg><span>تست اسپوف</span>
         </button>
         <button class="navitem" type="button" role="tab" id="tab-tunnels" data-view="tunnels" aria-selected="false" aria-controls="view-tunnels" tabindex="-1">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><span>تانل‌ها</span>
@@ -175,7 +172,12 @@
       </section>
 
       <!-- Simple -->
-      <section id="view-simple" class="panel" role="tabpanel" aria-labelledby="tab-simple" tabindex="0" hidden>
+      <section id="view-test" class="panel" role="tabpanel" aria-labelledby="tab-test" tabindex="0" hidden>
+        <div class="subswitch" role="group" aria-label="حالت تست">
+          <button type="button" data-sub="simple" aria-selected="true">تست ساده</button>
+          <button type="button" data-sub="list" aria-selected="false">تست لیست</button>
+        </div>
+      <section id="view-simple" class="panel">
         <div class="card stack">
           <h2>تست ساده</h2>
           <p class="muted lead">وقتی مسیر عادی برقرار است، فقط آی‌پی سرور مقصد را بزنید. پنل هشت بسته با سورس <span class="ltr">192.0.2.1</span> می‌فرستد تا معلوم شود اسپوف باز است یا نه.</p>
@@ -200,7 +202,7 @@
       </section>
 
       <!-- List -->
-      <section id="view-list" class="panel" role="tabpanel" aria-labelledby="tab-list" tabindex="0" hidden>
+      <section id="view-list" class="panel" hidden>
         <div class="card stack">
           <h2>تست لیست</h2>
           <p class="muted lead">تا ۱۰۰۰ آی‌پی را بگذارید و آی‌پی سرور مقصد را وارد کنید. پنل مقصد نشان می‌دهد کدام سورس سالم رسیده، کدام عوض شده و کدام نرسیده است.</p>
@@ -230,6 +232,7 @@
           <p id="list-error" class="alert" role="alert" hidden></p>
         </div>
         <section id="list-result" class="card stack"></section>
+      </section>
       </section>
 
       <!-- Tunnels -->

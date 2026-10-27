@@ -16,7 +16,7 @@ const VERDICT = {
 const ROW = { passed: "باز", rewritten: "عوض شد", missing: "نرسید", pending: "منتظر" };
 const FA = "۰۱۲۳۴۵۶۷۸۹";
 
-const state = { view: "simple", simpleRole: "sender", listRole: "sender", timer: 0, last: null, rawReady: true };
+const state = { view: "dash", simpleRole: "sender", listRole: "sender", timer: 0, last: null, rawReady: true };
 const result = {
   simple: { box: null, built: false, role: "", rowEls: {}, refs: null },
   list: { box: null, built: false, role: "", rowEls: {}, refs: null }
@@ -210,8 +210,7 @@ function selectView(view) {
     t.tabIndex = on ? 0 : -1;
   });
   $("view-dash").hidden = view !== "dash";
-  $("view-simple").hidden = view !== "simple";
-  $("view-list").hidden = view !== "list";
+  $("view-test").hidden = view !== "test";
   $("view-tunnels").hidden = view !== "tunnels";
   $("view-settings").hidden = view !== "settings";
   if (view === "tunnels") startTunnels();
@@ -232,6 +231,16 @@ tabs.forEach((btn, i) => {
 });
 
 /* ===== roles ===== */
+// Segmented switch inside the merged "تست اسپوف" tab (simple vs list).
+document.querySelectorAll(".subswitch [data-sub]").forEach((b) => {
+  b.addEventListener("click", () => {
+    const sub = b.dataset.sub;
+    document.querySelectorAll(".subswitch [data-sub]").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    $("view-simple").hidden = sub !== "simple";
+    $("view-list").hidden = sub !== "list";
+  });
+});
+
 function bindRoles(group, key) {
   document.querySelectorAll('[data-group="' + group + '"]').forEach((btn) => {
     btn.addEventListener("click", () => {
