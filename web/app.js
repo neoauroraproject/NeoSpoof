@@ -774,8 +774,80 @@ function stopTunnels() {
 }
 async function loadTunnels() {
   if (document.hidden) return;
-  try { const d = await api("/api/tunnels"); renderTunnels(d.tunnels || []); } catch (e) { /* 401/403 handled */ }
+  try {
+    const d = await api("/api/tunnels");
+    renderTunnels(d.tunnels || []);
+    fillFwdTunnelSelect(d.tunnels || []);
+    loadForwards();
+  } catch (e) { /* 401/403 handled */ }
 }
+
+/* ===== port forwarding ===== */
+const FWD_STATUS = { running: "فعال", stopped: "متوقف", error: "خطا" };
+function fillFwdTunnelSelect(list) {
+  const sel = $("fwd-tunnel"); if (!sel) return;
+  const prev = sel.value;
+  const clients = list.filter((t) => t.role !== "server");
+  sel.replaceChildren();
+  if (!clients.length) {
+    const o = document.createElement("option"); o.value = ""; o.textContent = "— تانل کلاینتی نیست —"; sel.appendChild(o); return;
+  }
+  clients.forEach((t) => {
+    const o = document.createElement("option"); o.value = String(t.id);
+    o.textContent = (t.name || ("#" + t.id)) + " · SOCKS " + t.socks_port + (t.status === "running" ? "" : " (متوقف)");
+    sel.appendChild(o);
+  });
+  if (prev) sel.value = prev;
+}
+async function loadForwards() {
+  try { const d = await api("/api/forwards"); renderForwards(d.forwards || []); } catch (e) { /* ignore */ }
+}
+function renderForwards(list) {
+  const box = $("fwd-list"); if (!box) return;
+  box.replaceChildren();
+  if (!list.length) return;
+  list.forEach((f) => {
+    const row = document.createElement("div"); row.className = "tn-row";
+    const head = document.createElement("div"); head.className = "row spread";
+    const title = document.createElement("h3"); title.textContent = f.name || ("#" + f.id);
+    const badge = document.createElement("span"); badge.className = "badge st-" + f.status; badge.textContent = FWD_STATUS[f.status] || f.status;
+    head.append(title, badge);
+    const meta = document.createElement("div"); meta.className = "meta";
+    const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
+    meta.append(m("محلی", "127.0.0.1:" + f.local_port), m("← سرویس", f.target_ip + ":" + f.target_port), m("از تانل", "#" + f.tunnel_id));
+    if (f.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = f.error; meta.append(e); }
+    const acts = document.createElement("div"); acts.className = "actions";
+    const toggle = document.createElement("button");
+    if (f.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => fwdAction("stop", f.id); }
+    else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => fwdAction("start", f.id); }
+    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
+    del.onclick = () => { if (confirm("این فوروارد حذف شود؟")) fwdAction("delete", f.id); };
+    acts.append(toggle, del);
+    row.append(head, meta, acts);
+    box.appendChild(row);
+  });
+}
+async function fwdAction(path, id) {
+  try { const d = await api("/api/forwards/" + path, { method: "POST", body: { id: id } }); renderForwards(d.forwards || []); }
+  catch (e) { toast(e.message, "err"); }
+}
+$("fwd-add").addEventListener("click", async () => {
+  setError("fwd-error", "");
+  const btn = $("fwd-add"); btn.disabled = true;
+  try {
+    const d = await api("/api/forwards", { method: "POST", body: {
+      name: $("fwd-name").value.trim(),
+      local_port: parseInt($("fwd-local").value, 10) || 0,
+      target_ip: $("fwd-tip").value.trim() || "127.0.0.1",
+      target_port: parseInt($("fwd-tport").value, 10) || 0,
+      tunnel_id: parseInt($("fwd-tunnel").value, 10) || 0
+    }});
+    $("fwd-name").value = ""; $("fwd-local").value = ""; $("fwd-tip").value = ""; $("fwd-tport").value = "";
+    renderForwards(d.forwards || []);
+    toast("فوروارد اضافه و فعال شد", "ok");
+  } catch (e) { setError("fwd-error", e.message); }
+  finally { btn.disabled = false; }
+});
 function renderTunnels(list) {
   const box = $("tn-list");
   box.replaceChildren();

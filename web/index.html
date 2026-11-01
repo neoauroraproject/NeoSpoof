@@ -269,6 +269,31 @@
           <div class="actions"><button id="imp-save" class="cta" type="button">ذخیره و اجرا</button></div>
         </div>
 
+        <div class="card stack">
+          <h2>فوروارد پورت (رد کردن سرویس از تانل)</h2>
+          <p class="muted lead">یک پورت محلی را از طریق یک تانل به یک سرویس روی سرور خارج وصل کن — برای 3x-ui، شادوساکس، VLESS یا هر پورتی (نه فقط SOCKS). سرویس روی خارج اجرا می‌شود؛ بعد در 3x-ui یک outbound به <span class="ltr">127.0.0.1:پورت‌محلی</span> بده.</p>
+          <div class="grid2">
+            <label>نام
+              <input id="fwd-name" type="text" placeholder="مثلاً shadowsocks">
+            </label>
+            <label>پورت محلی (روی ایران)
+              <input id="fwd-local" type="number" class="ltr" min="1024" max="65535" placeholder="8388">
+            </label>
+            <label>آی‌پی سرویس (روی خارج)
+              <input id="fwd-tip" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="127.0.0.1">
+            </label>
+            <label>پورت سرویس
+              <input id="fwd-tport" type="number" class="ltr" min="1" max="65535" placeholder="8388">
+            </label>
+            <label>از طریق تانل
+              <select id="fwd-tunnel"></select>
+            </label>
+          </div>
+          <p id="fwd-error" class="alert" role="alert" hidden></p>
+          <div class="actions"><button id="fwd-add" class="cta" type="button">افزودن فوروارد</button></div>
+          <div id="fwd-list" aria-live="polite"></div>
+        </div>
+
         <section id="tn-list" class="card stack" aria-live="polite"></section>
         <section id="tn-server-card" class="card stack" hidden>
           <div class="row spread">

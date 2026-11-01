@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "1.6.0"
+const version = "1.7.0"
 
 //go:embed web
 var webFS embed.FS
@@ -33,6 +33,7 @@ type server struct {
 	license  *licenseManager
 	manager  *tunnelManager
 	peers    *peerStore
+	forwards *forwardManager
 	dataDir  string
 }
 
@@ -66,6 +67,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	forwards, err := openForwards(*dataDir, mgr.socksAddrFor)
+	if err != nil {
+		log.Fatal(err)
+	}
 	// Let the license check fall back through the panel's own running tunnels.
 	lic.proxyFn = mgr.runningSocksAddrs
 	ln, boundPort, err := listen(*addr, *port)
@@ -73,7 +78,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	s := &server{auth: auth, probe: newProbe(), settings: set, license: lic, manager: mgr, peers: peers, dataDir: *dataDir}
+	s := &server{auth: auth, probe: newProbe(), settings: set, license: lic, manager: mgr, peers: peers, forwards: forwards, dataDir: *dataDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleStatic)
 	mux.HandleFunc("/api/login", s.handleLogin)
@@ -99,6 +104,10 @@ func main() {
 	mux.HandleFunc("/api/tunnels/import", s.guard(s.handleTunnelImport))
 	mux.HandleFunc("/api/peers", s.guard(s.handlePeers))
 	mux.HandleFunc("/api/peers/delete", s.guard(s.handlePeerDelete))
+	mux.HandleFunc("/api/forwards", s.guard(s.handleForwards))
+	mux.HandleFunc("/api/forwards/start", s.guard(s.handleForwardStart))
+	mux.HandleFunc("/api/forwards/stop", s.guard(s.handleForwardStop))
+	mux.HandleFunc("/api/forwards/delete", s.guard(s.handleForwardDelete))
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -661,6 +670,81 @@ func (s *server) handlePeerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"peers": s.peers.all()})
+}
+
+// handleForwards lists or creates port forwards (a local port routed through a
+// tunnel's SOCKS to a service on the far side).
+func (s *server) handleForwards(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"forwards": s.forwards.list()})
+	case http.MethodPost:
+		var body struct {
+			Name       string `json:"name"`
+			LocalPort  int    `json:"local_port"`
+			TargetIP   string `json:"target_ip"`
+			TargetPort int    `json:"target_port"`
+			TunnelID   int    `json:"tunnel_id"`
+		}
+		if err := readJSON(r, &body, 1<<16); err != nil {
+			writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+			return
+		}
+		dto, err := s.forwards.create(strings.TrimSpace(body.Name), body.LocalPort, strings.TrimSpace(body.TargetIP), body.TargetPort, body.TunnelID)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		_ = s.forwards.start(dto.ID) // open the listener now; it bridges once the tunnel is up
+		writeJSON(w, http.StatusOK, map[string]any{"forwards": s.forwards.list()})
+	default:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleForwardStart(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.forwards.start(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"forwards": s.forwards.list()})
+}
+
+func (s *server) handleForwardStop(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	_ = s.forwards.stop(id)
+	writeJSON(w, http.StatusOK, map[string]any{"forwards": s.forwards.list()})
+}
+
+func (s *server) handleForwardDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.forwards.remove(id); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"forwards": s.forwards.list()})
 }
 
 // requireLicense blocks operational endpoints until the license is active.

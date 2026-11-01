@@ -1,5 +1,18 @@
 # NeoSpoof — Iran "white" source IPs (ranges + CIDR supported).
 # The spoof test caps at 1000 expanded addresses; test in batches if needed.
+# --- Iranian CDN / service providers (ArvanCloud / Abrarvan, AS57568/208006/205585/202468) ---
+91.216.13.0/24
+193.24.119.0/24
+194.5.192.0/23
+194.5.206.0/23
+185.215.232.0/23
+185.143.232.0/22
+185.220.226.0/24
+185.204.168.0/22
+185.235.40.0/22
+130.185.120.0/22
+5.253.26.0/23
+# --- end providers ---
 2.144.130.12
 2.144.242.12
 2.144.242.28

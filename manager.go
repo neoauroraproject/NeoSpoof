@@ -484,6 +484,19 @@ func (m *tunnelManager) speedTest(id int) (speedResult, error) {
 	return speedResult{OK: n > 0, Mbps: mbps, Bytes: n, Seconds: secs}, nil
 }
 
+// socksAddrFor returns the local SOCKS5 address of one running client tunnel,
+// used by port forwards to route through that tunnel. Not for server-role
+// tunnels (they have no proxy).
+func (m *tunnelManager) socksAddrFor(id int) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in := m.inst[id]
+	if in == nil || in.status != "running" || in.conf.Role == "server" || in.conf.SocksPort <= 0 {
+		return "", false
+	}
+	return "127.0.0.1:" + strconv.Itoa(in.conf.SocksPort), true
+}
+
 // runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so
 // the license check can be routed out through the spoof tunnel itself.
 func (m *tunnelManager) runningSocksAddrs() []string {
