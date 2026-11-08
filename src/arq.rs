@@ -10,10 +10,15 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
-use crate::packet::CandyPacket;
+use crate::packet::NeoPacket;
 
-/// Maximum allowed send/receive window size.
-pub const MAX_WINDOW: u32 = 128;
+/// Maximum allowed send/receive window size (packets, per tunnel). This is the
+/// hard ceiling on how many packets may be in flight at once, so with N tunnels
+/// the pipe can hold up to `N × MAX_WINDOW × mtu` bytes — the throughput ceiling
+/// on a high-RTT path. 128 throttled fast links hard; 512 lets congestion control
+/// actually fill a long-fat path. The live congestion window still governs the
+/// real in-flight count, so a larger cap only removes an artificial limit.
+pub const MAX_WINDOW: u32 = 512;
 /// Maximum number of times a packet will be retransmitted before giving up.
 pub const MAX_RETRIES: u32 = 8;
 /// Default RTO when no RTT sample is available.
@@ -22,7 +27,7 @@ pub const DEFAULT_RTO: Duration = Duration::from_millis(500);
 // ── Internal book-keeping ─────────────────────────────────────────────────────
 
 struct SendSlot {
-    packet:      CandyPacket,
+    packet:      NeoPacket,
     sent_at:     Instant,
     retry_count: u32,
 }
@@ -39,7 +44,7 @@ pub struct SrArq {
 
     // Receiver
     recv_base: u32,
-    recv_buf:  HashMap<u32, CandyPacket>,
+    recv_buf:  HashMap<u32, NeoPacket>,
 
     /// Current retransmission timeout.
     pub rto: Duration,
@@ -75,7 +80,7 @@ impl SrArq {
 
     /// Assign a sequence number and buffer the packet for potential
     /// retransmission.  Returns the sequence number.
-    pub fn enqueue(&mut self, pkt: &mut CandyPacket) -> u32 {
+    pub fn enqueue(&mut self, pkt: &mut NeoPacket) -> u32 {
         let seq = self.send_next;
         pkt.seq = seq;
         self.send_buf.insert(seq, SendSlot {
@@ -87,16 +92,32 @@ impl SrArq {
         seq
     }
 
-    /// Process a cumulative ACK.  Returns the set of sequence numbers that
-    /// were newly acknowledged (useful for RTT sampling).
-    pub fn process_ack(&mut self, ack_num: u32) -> Vec<u32> {
+    /// Process a cumulative ACK. Returns the set of sequence numbers that were
+    /// newly acknowledged, plus an RTT sample (ms) when one is available.
+    ///
+    /// The RTT is taken from the most-recently-sent packet this ACK clears that
+    /// was transmitted exactly once (Karn's algorithm — a retransmitted packet's
+    /// RTT is ambiguous, so it is never sampled). This lets congestion control
+    /// track the live path during a transfer instead of only at idle heartbeats.
+    pub fn process_ack(&mut self, ack_num: u32) -> (Vec<u32>, Option<f64>) {
         let mut newly_acked = Vec::new();
+        let now = Instant::now();
+        let mut rtt_sample: Option<f64> = None;
+        let mut sampled_seq: Option<u32> = None;
 
         // Remove every slot with seq < ack_num (already delivered).
         let keys: Vec<u32> = self.send_buf.keys().copied().collect();
         for seq in keys {
             if seq_before(seq, ack_num) {
-                self.send_buf.remove(&seq);
+                if let Some(slot) = self.send_buf.remove(&seq) {
+                    if slot.retry_count == 0
+                        && sampled_seq.map_or(true, |prev| seq_before(prev, seq))
+                    {
+                        sampled_seq = Some(seq);
+                        rtt_sample =
+                            Some(now.duration_since(slot.sent_at).as_secs_f64() * 1000.0);
+                    }
+                }
                 newly_acked.push(seq);
             }
         }
@@ -104,12 +125,12 @@ impl SrArq {
         if !newly_acked.is_empty() {
             self.send_base = ack_num;
         }
-        newly_acked
+        (newly_acked, rtt_sample)
     }
 
     /// Process a NACK requesting retransmission of `seq`.  Returns the packet
     /// to resend, or `None` if `seq` is unknown or exhausted retries.
-    pub fn process_nack(&mut self, seq: u32) -> Option<CandyPacket> {
+    pub fn process_nack(&mut self, seq: u32) -> Option<NeoPacket> {
         let slot = self.send_buf.get_mut(&seq)?;
         if slot.retry_count >= MAX_RETRIES {
             log::warn!("ARQ: seq {} exceeded max retries – dropping", seq);
@@ -122,7 +143,7 @@ impl SrArq {
 
     /// Collect all in-flight packets whose RTO has expired.  The caller should
     /// retransmit them and notify the congestion controller.
-    pub fn take_timed_out(&mut self) -> Vec<CandyPacket> {
+    pub fn take_timed_out(&mut self) -> Vec<NeoPacket> {
         let now = Instant::now();
         let rto = self.rto;
         let mut expired = Vec::new();
@@ -146,7 +167,7 @@ impl SrArq {
     /// - `deliverable`: payloads that are now in order and ready for the application
     /// - `ack_num`: the next seq we expect (use in the next ACK packet)
     /// - `nacks`: seq numbers of detected gaps (request retransmission)
-    pub fn receive(&mut self, pkt: CandyPacket) -> (Vec<Bytes>, u32, Vec<u32>) {
+    pub fn receive(&mut self, pkt: NeoPacket) -> (Vec<Bytes>, u32, Vec<u32>) {
         let seq = pkt.seq;
         let mut deliverable = Vec::new();
         let mut nacks = Vec::new();
@@ -203,10 +224,10 @@ fn seq_before(a: u32, b: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet::CandyPacket;
+    use crate::packet::NeoPacket;
 
-    fn data_pkt(seq: u32) -> CandyPacket {
-        CandyPacket::new_data(1, seq, 0, 64, bytes::Bytes::from(vec![seq as u8]))
+    fn data_pkt(seq: u32) -> NeoPacket {
+        NeoPacket::new_data(1, seq, 0, 64, bytes::Bytes::from(vec![seq as u8]))
     }
 
     #[test]
@@ -239,8 +260,9 @@ mod tests {
         let mut p = data_pkt(0);
         let _seq = arq.enqueue(&mut p);
         assert!(!arq.can_send() || arq.in_flight() == 1);
-        let acked = arq.process_ack(1);
+        let (acked, rtt) = arq.process_ack(1);
         assert_eq!(acked.len(), 1);
+        assert!(rtt.is_some()); // a once-sent packet yields an RTT sample
         assert_eq!(arq.send_base(), 1);
     }
 

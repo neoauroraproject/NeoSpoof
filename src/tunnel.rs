@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, Mutex, Notify};
 use crate::arq::{SrArq, MAX_WINDOW};
 use crate::congestion::CongestionControl;
 use crate::config::Config;
-use crate::packet::{CandyPacket, PacketKind};
+use crate::packet::{NeoPacket, PacketKind};
 use crate::raw_socket::{OutPacket, RawSender};
 
 const HEARTBEAT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -46,11 +46,20 @@ struct Tunnel {
     app_tx:      mpsc::Sender<Bytes>,
     last_active: Instant,
     last_heartbeat_sent: Instant,
+    /// Stretch-ACK state: data segments received since the last ACK we sent, and
+    /// whether an ACK is owed (to be flushed by `tick`).
+    unacked_since: u32,
+    ack_pending:   bool,
     /// Notified whenever the send window opens (ACK received / window update).
     window_notify: Arc<Notify>,
     /// Notified when the tunnel transitions to Established.
     established_notify: Arc<Notify>,
 }
+
+/// Send one coalesced ACK per this many in-order data segments (a gap forces an
+/// ACK immediately). A still-pending ACK is flushed by `tick` within ~100 ms,
+/// which is below the 200 ms minimum RTO, so it never triggers a spurious resend.
+const ACK_STRETCH: u32 = 4;
 
 impl Tunnel {
     fn new(
@@ -69,6 +78,8 @@ impl Tunnel {
             app_tx,
             last_active: Instant::now(),
             last_heartbeat_sent: Instant::now(),
+            unacked_since: 0,
+            ack_pending:   false,
             window_notify:      Arc::new(Notify::new()),
             established_notify: Arc::new(Notify::new()),
         }
@@ -95,7 +106,7 @@ impl Tunnel {
         self.arq.update_rto(self.cc.rtt.rto);
     }
 
-    fn apply_syn_ack(&mut self, syn_ack: &CandyPacket) -> bool {
+    fn apply_syn_ack(&mut self, syn_ack: &NeoPacket) -> bool {
         if self.state != TunnelState::SynSent {
             return false;
         }
@@ -106,11 +117,11 @@ impl Tunnel {
         true
     }
 
-    fn make_data_packet(&mut self, payload: Bytes) -> CandyPacket {
+    fn make_data_packet(&mut self, payload: Bytes) -> NeoPacket {
         const UNASSIGNED_SEQ: u32 = u32::MAX;
         let ack    = self.arq.recv_base();
         let window = (MAX_WINDOW.saturating_sub(self.arq.in_flight())) as u16;
-        let mut pkt = CandyPacket::new_data(self.id, UNASSIGNED_SEQ, ack, window, payload);
+        let mut pkt = NeoPacket::new_data(self.id, UNASSIGNED_SEQ, ack, window, payload);
         let _seq = self.arq.enqueue(&mut pkt); // assigns sequence and buffers retransmit copy
         pkt
     }
@@ -191,7 +202,7 @@ impl TunnelManager {
         self.spawn_send_task(id, net_rx, window_notify);
 
         // Send the initial SYN on the control channel.
-        let syn = CandyPacket::new_syn(id, syn_seq);
+        let syn = NeoPacket::new_syn(id, syn_seq);
         self.tx_control(syn).await?;
 
         log::info!("tunnel {} opened (SYN sent)", id);
@@ -205,7 +216,7 @@ impl TunnelManager {
     /// Returns the same triple as `open_tunnel`.
     pub async fn accept_syn(
         &self,
-        syn:    CandyPacket,
+        syn:    NeoPacket,
         src_ip: Ipv4Addr,
     ) -> Result<(u32, mpsc::Receiver<Bytes>, mpsc::Sender<Bytes>)> {
         let id = syn.tunnel_id;
@@ -234,7 +245,7 @@ impl TunnelManager {
 
         self.spawn_send_task(id, net_rx, window_notify);
 
-        let syn_ack = CandyPacket::new_syn_ack(id, syn.seq, our_seq);
+        let syn_ack = NeoPacket::new_syn_ack(id, syn.seq, our_seq);
         self.tx_control(syn_ack).await?;
 
         log::info!("tunnel {} accepted from {}", id, src_ip);
@@ -249,7 +260,7 @@ impl TunnelManager {
         }
         self.0.established_notifiers.remove(&id);
 
-        let fin = CandyPacket::new_fin(id);
+        let fin = NeoPacket::new_fin(id);
         let _ = self.tx_control(fin).await;
     }
 
@@ -262,8 +273,8 @@ impl TunnelManager {
     pub async fn handle_incoming(
         &self,
         src_ip: Ipv4Addr,
-        pkt:    CandyPacket,
-    ) -> Result<Option<(CandyPacket, Ipv4Addr)>> {
+        pkt:    NeoPacket,
+    ) -> Result<Option<(NeoPacket, Ipv4Addr)>> {
         // SYN packets are not handled internally – hand them back to the caller.
         if pkt.kind == PacketKind::Syn {
             return Ok(Some((pkt, src_ip)));
@@ -290,7 +301,7 @@ impl TunnelManager {
                     let tid    = t.id;
                     let notify = t.established_notify.clone();
                     let wnotify = t.window_notify.clone();
-                    let ack = CandyPacket::new_ack(tid, pkt.seq.wrapping_add(1), MAX_WINDOW as u16);
+                    let ack = NeoPacket::new_ack(tid, pkt.seq.wrapping_add(1), MAX_WINDOW as u16);
                     drop(t);
                     // Wake any task waiting for establishment.
                     notify.notify_waiters();
@@ -301,12 +312,16 @@ impl TunnelManager {
             }
 
             PacketKind::Ack => {
-                let acked = t.arq.process_ack(pkt.ack);
+                let (acked, rtt_ms) = t.arq.process_ack(pkt.ack);
                 t.arq.set_send_window(pkt.window as u32);
                 if acked.is_empty() {
                     t.cc.on_duplicate_ack();
                 } else {
-                    t.cc.on_ack(None);
+                    // Feed the live RTT sample so srtt/rto track the real path
+                    // during transfers, not only at idle heartbeats.
+                    t.cc.on_ack(rtt_ms);
+                    let rto = t.cc.rtt.rto;
+                    t.arq.update_rto(rto);
                 }
                 // Notify the send task that window space may have opened.
                 t.window_notify.notify_one();
@@ -326,6 +341,18 @@ impl TunnelManager {
                 let (deliverable, ack_num, nacks) = t.arq.receive(pkt.clone());
 
                 let window = (MAX_WINDOW.saturating_sub(t.arq.in_flight())) as u16;
+
+                // Stretch-ACK: acknowledge every ACK_STRETCH segments instead of
+                // every packet. A gap (NACK) forces an immediate ACK so the sender
+                // recovers fast; otherwise the owed ACK is flushed by `tick`.
+                t.unacked_since += 1;
+                let send_ack = !nacks.is_empty() || t.unacked_since >= ACK_STRETCH;
+                if send_ack {
+                    t.unacked_since = 0;
+                    t.ack_pending = false;
+                } else {
+                    t.ack_pending = true;
+                }
                 drop(t);
 
                 for payload in deliverable {
@@ -335,9 +362,11 @@ impl TunnelManager {
                     }
                 }
 
-                self.tx_control(CandyPacket::new_ack(tid, ack_num, window)).await?;
+                if send_ack {
+                    self.tx_control(NeoPacket::new_ack(tid, ack_num, window)).await?;
+                }
                 for missing in nacks {
-                    self.tx_control(CandyPacket::new_nack(tid, missing)).await?;
+                    self.tx_control(NeoPacket::new_nack(tid, missing)).await?;
                 }
             }
 
@@ -348,7 +377,7 @@ impl TunnelManager {
 
             PacketKind::Heartbeat => {
                 let tid  = t.id;
-                let hb_ack = CandyPacket {
+                let hb_ack = NeoPacket {
                     kind:      PacketKind::HeartbeatAck,
                     tunnel_id: tid,
                     seq:       pkt.seq,
@@ -384,9 +413,10 @@ impl TunnelManager {
 
     /// Drive retransmissions and send heartbeats.  Call every ~100 ms.
     pub async fn tick(&self) -> Result<()> {
-        let (expired_pkts, heartbeats, _to_remove): (Vec<_>, Vec<_>, Vec<_>) = {
+        let (expired_pkts, heartbeats, acks): (Vec<_>, Vec<_>, Vec<_>) = {
             let mut exp  = Vec::new();
             let mut hbs  = Vec::new();
+            let mut acks = Vec::new();
             let mut dead = Vec::new();
             let now = Instant::now();
 
@@ -414,7 +444,14 @@ impl TunnelManager {
                     && now.duration_since(t.last_heartbeat_sent) >= HEARTBEAT_MIN_INTERVAL
                 {
                     t.last_heartbeat_sent = now;
-                    hbs.push(CandyPacket::new_heartbeat(t.id, rand::random()));
+                    hbs.push(NeoPacket::new_heartbeat(t.id, rand::random()));
+                }
+                // Flush a stretch-ACK that is still owed from the data path.
+                if t.state == TunnelState::Established && t.ack_pending {
+                    let window = (MAX_WINDOW.saturating_sub(t.arq.in_flight())) as u16;
+                    acks.push(NeoPacket::new_ack(t.id, t.arq.recv_base(), window));
+                    t.ack_pending = false;
+                    t.unacked_since = 0;
                 }
             }
 
@@ -422,11 +459,12 @@ impl TunnelManager {
                 self.0.tunnels.remove(id);
                 self.0.established_notifiers.remove(id);
             }
-            (exp, hbs, dead)
+            (exp, hbs, acks)
         };
 
         for pkt in expired_pkts { self.tx_data(pkt).await?; }
         for hb  in heartbeats   { self.tx_control(hb).await?; }
+        for ack in acks         { self.tx_control(ack).await?; }
         Ok(())
     }
 
@@ -533,7 +571,7 @@ impl TunnelManager {
         self.tx_data(pkt).await
     }
 
-    async fn tx_control(&self, pkt: CandyPacket) -> Result<()> {
+    async fn tx_control(&self, pkt: NeoPacket) -> Result<()> {
         let a   = &self.0.addr;
         let enc = pkt.encode();
         let out = OutPacket::Icmp {
@@ -546,7 +584,7 @@ impl TunnelManager {
         self.0.sender.send(out).await
     }
 
-    async fn tx_data(&self, pkt: CandyPacket) -> Result<()> {
+    async fn tx_data(&self, pkt: NeoPacket) -> Result<()> {
         let a   = &self.0.addr;
         let enc = pkt.encode();
         let out = OutPacket::Udp {
@@ -569,7 +607,7 @@ mod tests {
         const PEER_SEQ: u32 = 777;
         let (app_tx, _app_rx) = mpsc::channel::<Bytes>(1);
         let mut tunnel = Tunnel::new(1, TunnelState::SynSent, 100, 0, app_tx, 10.0);
-        let syn_ack = CandyPacket::new_syn_ack(1, 99, PEER_SEQ);
+        let syn_ack = NeoPacket::new_syn_ack(1, 99, PEER_SEQ);
 
         assert_eq!(tunnel.arq.recv_base(), 0);
         assert!(tunnel.apply_syn_ack(&syn_ack));
@@ -605,7 +643,7 @@ mod tests {
             app_tx,
             10.0,
         );
-        let syn_ack = CandyPacket::new_syn_ack(TID, PEER_SEQ, OUR_SYN_ACK_SEQ);
+        let syn_ack = NeoPacket::new_syn_ack(TID, PEER_SEQ, OUR_SYN_ACK_SEQ);
         let first_data = tunnel.make_data_packet(Bytes::from_static(b"x"));
 
         assert_eq!(first_data.seq, syn_ack.seq.wrapping_add(1));

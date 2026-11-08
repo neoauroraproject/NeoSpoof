@@ -108,7 +108,10 @@ impl CongestionControl {
     pub fn new(initial_cwnd: f64) -> Self {
         Self {
             cwnd:      initial_cwnd,
-            ssthresh:  64.0,
+            // Slow-start exits here into the slow additive-increase phase. Raised
+            // from 64 so a clean long-fat path ramps to a useful window quickly;
+            // the MAX_WINDOW cap and loss-driven backoff still bound it.
+            ssthresh:  128.0,
             state:     CcState::SlowStart,
             rtt:       RttEstimator::new(),
             dup_acks:  0,

@@ -29,9 +29,10 @@ import (
 //   - The license server signs short-lived tokens with an Ed25519 private key
 //     that never ships. The client only holds the public key, so it can verify
 //     authenticity but cannot forge a token.
-//   - A license is bound to the server's public IP on first activation. The
-//     license server refuses to issue a token for a different IP, so the binary
-//     cannot be moved to another server and keep working past the current token.
+//   - A license is locked to a device slot keyed by a hardware fingerprint
+//     (device_info.go), so a server whose IP changes keeps running, while a copy
+//     on another machine is refused until the customer frees the old device in
+//     the license panel. Without a fingerprint the server binds the first IP.
 //   - Tokens expire. The client re-checks every 24h and trusts the server's
 //     signed timestamps (plus a monotonic high-water mark) rather than the local
 //     clock, so rolling the clock back does not extend a license.
@@ -400,11 +401,13 @@ func (m *licenseManager) saveLocked() error {
 func (m *licenseManager) contact(key string) (*tokenClaims, string, error) {
 	nonce := make([]byte, 16)
 	_, _ = rand.Read(nonce)
-	reqBody, _ := json.Marshal(map[string]string{
+	body := map[string]string{
 		"key":     key,
 		"nonce":   hex.EncodeToString(nonce),
 		"version": version,
-	})
+	}
+	addDeviceInfo(body)
+	reqBody, _ := json.Marshal(body)
 	var lastErr error
 	for _, host := range m.endpoints {
 		resp, err := m.post(host, reqBody)

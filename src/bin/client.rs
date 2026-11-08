@@ -1,6 +1,6 @@
-//! Candy-Spoof **client** binary.
+//! NeoSpoof **client** binary.
 //!
-//! Starts a local SOCKS5 proxy and connects it to the remote Candy-Spoof server
+//! Starts a local SOCKS5 proxy and connects it to the remote NeoSpoof server
 //! via a spoofed UDP/ICMP tunnel.
 //!
 //! Usage:
@@ -12,13 +12,13 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 
-use candy_spoof::config::Config;
-use candy_spoof::raw_socket::{RawReceiver, RawSender};
-use candy_spoof::socks5::run_socks5;
-use candy_spoof::tunnel::{PeerAddr, TunnelManager};
+use neospoof::config::Config;
+use neospoof::raw_socket::{RawReceiver, RawSender};
+use neospoof::socks5::run_socks5;
+use neospoof::tunnel::{PeerAddr, TunnelManager};
 
 #[derive(Parser, Debug)]
-#[command(name = "client", about = "Candy-Spoof client (SOCKS5 proxy)")]
+#[command(name = "client", about = "NeoSpoof client (SOCKS5 proxy)")]
 struct Args {
     /// Path to the TOML configuration file.
     #[arg(short, long, default_value = "config/client.toml")]
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     let cfg = Arc::new(Config::from_file(&args.config)?);
 
     log::info!(
-        "Candy-Spoof client starting | real={} spoof={} peer={}",
+        "NeoSpoof client starting | real={} spoof={} peer={}",
         cfg.real_ip,
         cfg.spoofed_ip,
         cfg.peer_real_ip

@@ -1062,7 +1062,16 @@ function renderDash(list) {
       else { passTd.textContent = "—"; }
       tr.appendChild(passTd);
       tr.appendChild(td(c && c.ok && c.latency_ms ? fa(c.latency_ms) + "ms" : "—", "ltr"));
-      tr.appendChild(td(sp && sp.ok ? fa(Math.round(sp.mbps * 10) / 10) + " Mbps" : "—", "ltr"));
+      const spTd = document.createElement("td"); spTd.className = "ltr";
+      if (sp && sp.ok) {
+        const dn = Math.round((sp.down_mbps != null ? sp.down_mbps : sp.mbps) * 10) / 10;
+        const up = Math.round((sp.up_mbps || 0) * 10) / 10;
+        spTd.textContent = "↓" + fa(dn) + (up ? " ↑" + fa(up) : "") + " Mbps";
+        const ping = sp.ping_ms ? Math.round(sp.ping_ms) : 0;
+        const jit = sp.jitter_ms ? Math.round(sp.jitter_ms) : 0;
+        spTd.title = [ping ? "پینگ " + fa(ping) + "ms" : "", jit ? "جیتر " + fa(jit) + "ms" : ""].filter(Boolean).join(" · ");
+      } else { spTd.textContent = "—"; }
+      tr.appendChild(spTd);
       tr.appendChild(td(c && c.exit_ip ? c.exit_ip : "—", "ltr"));
     }
     tbody.appendChild(tr);
@@ -1086,14 +1095,35 @@ async function runDashSpeeds() {
   try { const d = await api("/api/tunnels"); list = d.tunnels || []; } catch (e) { return; }
   const targets = list.filter((x) => x.status === "running" && isClient(x));
   if (!targets.length) { toast("تانل کلاینت فعالی برای تست سرعت نیست", "err"); return; }
-  toast("تست سرعت شروع شد (چند مگابایت دانلود می‌شود)…", "info");
+  toast("تست سرعت شروع شد (دانلود، آپلود، پینگ و جیتر)…", "info");
   for (const t of targets) {
     try { tn.speeds[t.id] = await api("/api/tunnels/speed", { method: "POST", body: { id: t.id } }); renderDash(list); }
     catch (e) { /* ignore a single failed speed test */ }
   }
 }
+async function runDashOptimize() {
+  let list = [];
+  try { const d = await api("/api/tunnels"); list = d.tunnels || []; } catch (e) { return; }
+  const targets = list.filter((x) => x.status === "running" && isClient(x));
+  if (!targets.length) { toast("تانل کلاینت فعالی برای بهینه‌سازی نیست", "err"); return; }
+  toast("بهینه‌سازی خودکار شروع شد (تست سرعت، تنظیم و ری‌استارت)…", "info");
+  for (const t of targets) {
+    try {
+      const r = await api("/api/tunnels/optimize", { method: "POST", body: { id: t.id } });
+      if (r && r.ok && r.applied && r.after) {
+        tn.speeds[t.id] = r.speed;
+        toast(t.name + ": MTU " + fa(r.after.mtu) + "، پنجره " + fa(Math.round(r.after.initial_cwnd)) + "، " + fa(r.after.tunnel_count) + " تونل", "ok");
+      } else {
+        toast(t.name + ": " + (r && r.detail ? r.detail : "بهینه‌سازی انجام نشد"), "err");
+      }
+    } catch (e) { toast(t.name + ": خطا در بهینه‌سازی", "err"); }
+  }
+  // Configs and processes changed — reload the table from the server.
+  try { const d = await api("/api/tunnels"); renderDash(d.tunnels || []); } catch (e) { /* ignore */ }
+}
 $("dash-refresh").addEventListener("click", () => { runDashChecks(); toast("بررسی عبور شروع شد", "info"); });
 $("dash-speed").addEventListener("click", () => { runDashSpeeds(); });
+$("dash-optimize").addEventListener("click", () => { runDashOptimize(); });
 
 /* ===== server registry (peers) ===== */
 let peersCache = [];

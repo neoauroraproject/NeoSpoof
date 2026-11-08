@@ -179,3 +179,53 @@ func TestLicenseEndpointsDecode(t *testing.T) {
 		t.Fatalf("endpoints decoded wrong: %#v", eps)
 	}
 }
+
+func TestLicenseSendsDeviceFingerprint(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		payload, _ := json.Marshal(tokenClaims{
+			Key: got["key"], BoundIP: "203.0.113.7", Plan: "pro", Nonce: got["nonce"],
+			IssuedAt: time.Now().Unix(), ExpiresAt: time.Now().Add(licenseGrace).Unix(),
+		})
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"payload": base64.StdEncoding.EncodeToString(payload),
+			"sig":     base64.StdEncoding.EncodeToString(ed25519.Sign(priv, payload)),
+			"your_ip": "203.0.113.7",
+		})
+	}))
+	defer srv.Close()
+	fingerprintOnce.Do(func() {}) // keep the real machine out of the test
+	fingerprintVal = "abc123"
+	m := newTestManager(t, pub, strings.TrimPrefix(srv.URL, "http://"))
+	if err := m.activate("KEY-ABCDEFGH"); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if got["fingerprint"] != "abc123" || got["os"] == "" || got["arch"] == "" {
+		t.Fatalf("device fields not sent: %v", got)
+	}
+}
+
+func TestFingerprintFrom(t *testing.T) {
+	dir := t.TempDir()
+	mid := filepath.Join(dir, "machine-id")
+	uuid := filepath.Join(dir, "product_uuid")
+	_ = os.WriteFile(mid, []byte("0123456789abcdef0123456789abcdef\n"), 0o644)
+	_ = os.WriteFile(uuid, []byte("00000000-0000-0000-0000-000000000000\n"), 0o644)
+	a := fingerprintFrom([]string{mid, uuid, filepath.Join(dir, "missing")})
+	if len(a) != 64 || a != fingerprintFrom([]string{mid}) {
+		t.Fatalf("all-zero uuid and missing files must be skipped, got %q", a)
+	}
+	_ = os.WriteFile(uuid, []byte("4C4C4544-0042-3510-8051-B4C04F4E4C32\n"), 0o644)
+	if b := fingerprintFrom([]string{mid, uuid}); b == a || len(b) != 64 {
+		t.Fatalf("uuid must change the fingerprint, got %q", b)
+	}
+	if fingerprintFrom([]string{filepath.Join(dir, "missing")}) != "" {
+		t.Fatal("no sources must give no fingerprint")
+	}
+	_ = os.WriteFile(mid, []byte("NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04 LTS\"\n"), 0o644)
+	if v := osPrettyName(mid); v != "Ubuntu 24.04 LTS" {
+		t.Fatalf("PRETTY_NAME = %q", v)
+	}
+}

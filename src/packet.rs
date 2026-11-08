@@ -1,17 +1,17 @@
-//! Candy-Spoof wire protocol – the application-level packet that rides inside
+//! NeoSpoof wire protocol – the application-level packet that rides inside
 //! spoofed UDP (data channel) or ICMP Echo (control channel) payloads.
 
 use anyhow::{bail, Result};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-/// 4-byte magic number at the start of every CandyPacket.
+/// 4-byte magic number at the start of every NeoPacket.
 pub const MAGIC: u32 = 0xCA_FE_5F_00;
 /// Current protocol version.
 pub const VERSION: u8 = 1;
-/// Minimum wire size of a CandyPacket (no payload).
+/// Minimum wire size of a NeoPacket (no payload).
 pub const HEADER_SIZE: usize = 18;
 
-/// Type of a CandyPacket.
+/// Type of a NeoPacket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PacketKind {
@@ -50,14 +50,14 @@ impl TryFrom<u8> for PacketKind {
     }
 }
 
-/// An application-level Candy-Spoof packet.
+/// An application-level NeoSpoof packet.
 ///
 /// Wire format (big-endian):
 /// ```text
 /// [magic:4][version:1][kind:1][tunnel_id:4][seq:4][ack:4][window:2][payload…]
 /// ```
 #[derive(Debug, Clone)]
-pub struct CandyPacket {
+pub struct NeoPacket {
     pub kind:      PacketKind,
     pub tunnel_id: u32,
     /// Sequence number of this packet (data) or highest received seq + 1 (ack).
@@ -70,7 +70,7 @@ pub struct CandyPacket {
     pub payload:   Bytes,
 }
 
-impl CandyPacket {
+impl NeoPacket {
     // ── Constructors ──────────────────────────────────────────────────────────
 
     pub fn new_syn(tunnel_id: u32, seq: u32) -> Self {
@@ -182,7 +182,7 @@ impl CandyPacket {
         let ack       = data.get_u32();
         let window    = data.get_u16();
         let payload   = data; // remaining bytes
-        Ok(CandyPacket { kind, tunnel_id, seq, ack, window, payload })
+        Ok(NeoPacket { kind, tunnel_id, seq, ack, window, payload })
     }
 }
 
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn syn_uses_provided_sequence() {
-        let pkt = CandyPacket::new_syn(42, 12345);
+        let pkt = NeoPacket::new_syn(42, 12345);
         assert_eq!(pkt.kind, PacketKind::Syn);
         assert_eq!(pkt.tunnel_id, 42);
         assert_eq!(pkt.seq, 12345);
