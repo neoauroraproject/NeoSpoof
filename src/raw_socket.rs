@@ -6,7 +6,7 @@
 //!   via a `SOCK_RAW | IPPROTO_RAW` socket with `IP_HDRINCL`.
 //! - [`RawReceiver`] – receives raw IP packets from a `SOCK_RAW | IPPROTO_UDP`
 //!   or `SOCK_RAW | IPPROTO_ICMP` socket and demultiplexes them into
-//!   `CandyPacket`s.
+//!   `NeoPacket`s.
 //!
 //! Both types are bridge objects between the blocking raw-socket world and the
 //! async Tokio world.  Each spawns background `std::thread`s that communicate
@@ -26,7 +26,7 @@ use pnet_packet::udp::MutableUdpPacket;
 use pnet_packet::Packet;
 use tokio::sync::mpsc;
 
-use crate::packet::CandyPacket;
+use crate::packet::NeoPacket;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -73,8 +73,8 @@ pub enum OutPacket {
 pub struct InPacket {
     /// True source IP (from the IP header).
     pub src_ip: Ipv4Addr,
-    /// Parsed Candy-Spoof application packet.
-    pub pkt:    CandyPacket,
+    /// Parsed NeoSpoof application packet.
+    pub pkt:    NeoPacket,
 }
 
 // ── RawSender ────────────────────────────────────────────────────────────────
@@ -92,13 +92,24 @@ impl RawSender {
         let fd = create_raw_send_socket()?;
         let (tx, mut rx) = mpsc::channel::<OutPacket>(4096);
 
-        // Dedicated blocking sender thread. This avoids expensive per-packet
-        // spawn_blocking scheduling overhead under high packet rates.
+        // Dedicated blocking sender thread. It drains whatever is queued and sends
+        // it in one `sendmmsg` syscall (up to MAX_BATCH packets), so the per-packet
+        // syscall cost — the main send-side bottleneck at high packet rates — is
+        // amortised across the batch instead of paid once per packet.
         std::thread::Builder::new()
             .name("raw-send".into())
             .spawn(move || {
-                while let Some(out) = rx.blocking_recv() {
-                    if let Err(e) = send_out_packet(fd, out) {
+                const MAX_BATCH: usize = 64;
+                while let Some(first) = rx.blocking_recv() {
+                    let mut batch: Vec<(Vec<u8>, Ipv4Addr)> = Vec::with_capacity(MAX_BATCH);
+                    batch.push(out_to_wire(first));
+                    while batch.len() < MAX_BATCH {
+                        match rx.try_recv() {
+                            Ok(out) => batch.push(out_to_wire(out)),
+                            Err(_) => break,
+                        }
+                    }
+                    if let Err(e) = send_batch(fd, &batch) {
                         log::warn!("raw-send error: {}", e);
                     }
                 }
@@ -204,21 +215,81 @@ fn create_raw_recv_socket(proto: libc::c_int) -> Result<RawFd> {
 
 // ── Packet transmission ───────────────────────────────────────────────────────
 
-fn send_out_packet(fd: RawFd, out: OutPacket) -> Result<()> {
+/// Serialise one outgoing packet to its on-wire bytes plus the destination IP.
+fn out_to_wire(out: OutPacket) -> (Vec<u8>, Ipv4Addr) {
     match out {
         OutPacket::Udp { src_ip, dst_ip, src_port, dst_port, payload } => {
-            let raw = build_udp_packet(src_ip, dst_ip, src_port, dst_port, &payload);
-            raw_sendto(fd, &raw, dst_ip)
+            (build_udp_packet(src_ip, dst_ip, src_port, dst_port, &payload), dst_ip)
         }
         OutPacket::Icmp { src_ip, dst_ip, id, seq, payload } => {
-            let raw = build_icmp_echo(src_ip, dst_ip, id, seq, &payload, false);
-            raw_sendto(fd, &raw, dst_ip)
+            (build_icmp_echo(src_ip, dst_ip, id, seq, &payload, false), dst_ip)
         }
         OutPacket::IcmpReply { src_ip, dst_ip, id, seq, payload } => {
-            let raw = build_icmp_echo(src_ip, dst_ip, id, seq, &payload, true);
-            raw_sendto(fd, &raw, dst_ip)
+            (build_icmp_echo(src_ip, dst_ip, id, seq, &payload, true), dst_ip)
         }
     }
+}
+
+fn sockaddr_for(dst: Ipv4Addr) -> libc::sockaddr_in {
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = 0;
+    addr.sin_addr = libc::in_addr { s_addr: u32::from(dst).to_be() };
+    addr
+}
+
+/// Send a batch of pre-serialised packets. Uses one `sendmmsg` syscall for the
+/// whole batch; on any error it falls back to per-packet `sendto` for the
+/// remainder, so a kernel or path that dislikes `sendmmsg` never stalls the tunnel.
+fn send_batch(fd: RawFd, batch: &[(Vec<u8>, Ipv4Addr)]) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    if batch.len() == 1 {
+        return raw_sendto(fd, &batch[0].0, batch[0].1);
+    }
+
+    // These vectors own the memory the mmsghdr pointers reference; they are
+    // pre-sized so no reallocation moves the data while the pointers are live.
+    let mut addrs: Vec<libc::sockaddr_in> = Vec::with_capacity(batch.len());
+    let mut iovecs: Vec<libc::iovec> = Vec::with_capacity(batch.len());
+    for (bytes, dst) in batch {
+        addrs.push(sockaddr_for(*dst));
+        iovecs.push(libc::iovec {
+            iov_base: bytes.as_ptr() as *mut libc::c_void,
+            iov_len: bytes.len(),
+        });
+    }
+    let mut msgs: Vec<libc::mmsghdr> = Vec::with_capacity(batch.len());
+    for i in 0..batch.len() {
+        let mut hdr: libc::mmsghdr = unsafe { std::mem::zeroed() };
+        hdr.msg_hdr.msg_name = (&addrs[i] as *const libc::sockaddr_in) as *mut libc::c_void;
+        hdr.msg_hdr.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        hdr.msg_hdr.msg_iov = (&iovecs[i] as *const libc::iovec) as *mut libc::iovec;
+        hdr.msg_hdr.msg_iovlen = 1;
+        msgs.push(hdr);
+    }
+
+    let mut sent = 0usize;
+    while sent < msgs.len() {
+        let n = unsafe {
+            libc::sendmmsg(
+                fd,
+                msgs[sent..].as_mut_ptr(),
+                (msgs.len() - sent) as libc::c_uint,
+                0,
+            )
+        };
+        if n <= 0 {
+            // Fall back to per-packet send for everything still unsent.
+            for (bytes, dst) in &batch[sent..] {
+                let _ = raw_sendto(fd, bytes, *dst);
+            }
+            return Ok(());
+        }
+        sent += n as usize;
+    }
+    Ok(())
 }
 
 fn raw_sendto(fd: RawFd, data: &[u8], dst: Ipv4Addr) -> Result<()> {
@@ -282,7 +353,7 @@ fn udp_recv_loop(
             continue;
         }
         let payload = bytes::Bytes::copy_from_slice(&udp_data[UDP_HDR_LEN..]);
-        match CandyPacket::decode(payload) {
+        match NeoPacket::decode(payload) {
             Ok(pkt) => {
                 let _ = tx.blocking_send(InPacket { src_ip, pkt });
             }
@@ -329,7 +400,7 @@ fn icmp_recv_loop(
         }
 
         let payload = bytes::Bytes::copy_from_slice(&icmp_data[ICMP_ECHO_HDR_LEN..]);
-        match CandyPacket::decode(payload) {
+        match NeoPacket::decode(payload) {
             Ok(pkt) => {
                 let _ = tx.blocking_send(InPacket { src_ip, pkt });
             }

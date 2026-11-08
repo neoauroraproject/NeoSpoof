@@ -1,7 +1,7 @@
 //! SOCKS5 proxy server (client side only).
 //!
 //! Accepts local TCP connections on `cfg.socks5_port`, performs the SOCKS5
-//! handshake, and relays data bidirectionally through a Candy-Spoof tunnel.
+//! handshake, and relays data bidirectionally through a NeoSpoof tunnel.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -58,6 +58,10 @@ async fn handle_client(
     manager:    TunnelManager,
     cfg:        Arc<Config>,
 ) -> Result<()> {
+    // Disable Nagle: the tunnel already batches, so Nagle only adds latency to
+    // small interactive requests.
+    let _ = stream.set_nodelay(true);
+
     // ── 1. Method negotiation ────────────────────────────────────────────────
     let mut header = [0u8; 2];
     stream.read_exact(&mut header).await.context("SOCKS5 greeting")?;

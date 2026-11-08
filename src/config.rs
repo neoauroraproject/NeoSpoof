@@ -1,4 +1,4 @@
-//! Configuration types for Candy-Spoof.
+//! Configuration types for NeoSpoof.
 //!
 //! Both client and server share this configuration schema. Load with
 //! `Config::from_file("config/client.toml")`.
@@ -29,7 +29,7 @@ pub struct Config {
     /// UDP destination port used for the data channel.
     pub data_port: u16,
 
-    /// ICMP echo identifier used to distinguish Candy-Spoof control packets
+    /// ICMP echo identifier used to distinguish NeoSpoof control packets
     /// from regular ping traffic.
     pub icmp_id: u16,
 

@@ -1,4 +1,4 @@
-//! Candy-Spoof **server** binary.
+//! NeoSpoof **server** binary.
 //!
 //! Listens for incoming tunnel connections from clients and forwards each
 //! SOCKS5 CONNECT session to the requested TCP destination.
@@ -15,12 +15,12 @@ use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-use candy_spoof::config::Config;
-use candy_spoof::raw_socket::{RawReceiver, RawSender};
-use candy_spoof::tunnel::{PeerAddr, TunnelManager};
+use neospoof::config::Config;
+use neospoof::raw_socket::{RawReceiver, RawSender};
+use neospoof::tunnel::{PeerAddr, TunnelManager};
 
 #[derive(Parser, Debug)]
-#[command(name = "server", about = "Candy-Spoof server (tunnel endpoint)")]
+#[command(name = "server", about = "NeoSpoof server (tunnel endpoint)")]
 struct Args {
     /// Path to the TOML configuration file.
     #[arg(short, long, default_value = "config/server.toml")]
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     let cfg = Arc::new(Config::from_file(&args.config)?);
 
     log::info!(
-        "Candy-Spoof server starting | real={} spoof={} peer={}",
+        "NeoSpoof server starting | real={} spoof={} peer={}",
         cfg.real_ip,
         cfg.spoofed_ip,
         cfg.peer_real_ip
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
 /// Accept a SYN, wait for the first DATA packet containing the CONNECT
 /// destination, open a TCP connection to that destination, and relay data.
 async fn handle_new_tunnel(
-    syn:     candy_spoof::packet::CandyPacket,
+    syn:     neospoof::packet::NeoPacket,
     src_ip:  std::net::Ipv4Addr,
     manager: TunnelManager,
     cfg:     Arc<Config>,
@@ -145,6 +145,7 @@ async fn handle_new_tunnel(
     let tcp_stream = TcpStream::connect(&target_addr)
         .await
         .with_context(|| format!("connect to {}", target_addr))?;
+    let _ = tcp_stream.set_nodelay(true); // low latency to the real destination
 
     let (mut tcp_r, mut tcp_w) = tcp_stream.into_split();
     let mtu = cfg.mtu;

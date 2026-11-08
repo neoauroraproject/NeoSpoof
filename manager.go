@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -403,18 +405,27 @@ func (m *tunnelManager) check(id int) (trafficCheck, error) {
 	return trafficCheck{OK: ok, LatencyMS: lat, Bytes: len(body), ExitIP: exitIP, Detail: detail}, nil
 }
 
-// speedResult is the throughput measured by pulling a few MB through a tunnel's
-// SOCKS proxy — real data rate, not just a latency ping.
+// speedResult is a full quality measurement through a tunnel's own SOCKS proxy:
+// download and upload throughput, plus latency and jitter — the four numbers the
+// panel shows. Mbps mirrors DownMbps so older UI builds keep working.
 type speedResult struct {
-	OK      bool    `json:"ok"`
-	Mbps    float64 `json:"mbps"`
-	Bytes   int64   `json:"bytes"`
-	Seconds float64 `json:"seconds"`
-	Detail  string  `json:"detail,omitempty"`
+	OK        bool    `json:"ok"`
+	Mbps      float64 `json:"mbps"`      // = DownMbps (backwards compatibility)
+	DownMbps  float64 `json:"down_mbps"`
+	UpMbps    float64 `json:"up_mbps"`
+	PingMS    float64 `json:"ping_ms"`     // average round-trip
+	MinPingMS float64 `json:"min_ping_ms"` // best round-trip
+	JitterMS  float64 `json:"jitter_ms"`   // mean variation between samples
+	Bytes     int64          `json:"bytes"`
+	Seconds   float64        `json:"seconds"`
+	Suggest   tuneSuggestion `json:"suggest"`
+	Detail    string         `json:"detail,omitempty"`
 }
 
-// speedTest downloads a few MB through the tunnel's SOCKS proxy and reports the
-// throughput in Mbps.
+// speedTest measures ping, jitter, download and upload through the tunnel's SOCKS
+// proxy, so the traffic table shows real quality, not just reachability. Each
+// phase is best-effort: a phase that fails leaves its value at zero and the rest
+// still run.
 func (m *tunnelManager) speedTest(id int) (speedResult, error) {
 	m.mu.Lock()
 	in := m.inst[id]
@@ -433,23 +444,228 @@ func (m *tunnelManager) speedTest(id int) (speedResult, error) {
 	port := in.conf.SocksPort
 	m.mu.Unlock()
 
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: &http.Transport{DialContext: socksDialer("127.0.0.1:" + strconv.Itoa(port))},
+	dial := socksDialer("127.0.0.1:" + strconv.Itoa(port))
+	newClient := func(t time.Duration) *http.Client {
+		// One transport per phase; keep-alive lets the ping phase reuse a single
+		// tunnel connection so it measures steady-state RTT, not handshake cost.
+		return &http.Client{Timeout: t, Transport: &http.Transport{DialContext: dial}}
 	}
+	var res speedResult
+
+	// 1) Ping + jitter — a handful of tiny requests over one kept-alive connection.
+	pc := newClient(8 * time.Second)
+	var rtts []float64
+	for i := 0; i < 12; i++ {
+		start := time.Now()
+		resp, err := pc.Get("http://speed.cloudflare.com/__down?bytes=10")
+		if err != nil {
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+		resp.Body.Close()
+		rtts = append(rtts, float64(time.Since(start).Microseconds())/1000.0)
+	}
+	if len(rtts) > 1 {
+		rtts = rtts[1:] // drop the first sample (connection setup)
+	}
+	if len(rtts) > 0 {
+		res.MinPingMS, res.PingMS, res.JitterMS = pingStats(rtts)
+	}
+
+	// 2) Download.
+	dc := newClient(30 * time.Second)
 	start := time.Now()
-	resp, err := client.Get("http://speed.cloudflare.com/__down?bytes=3000000")
+	if resp, err := dc.Get("http://speed.cloudflare.com/__down?bytes=8000000"); err == nil {
+		n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<20))
+		resp.Body.Close()
+		secs := time.Since(start).Seconds()
+		if secs > 0 {
+			res.DownMbps = float64(n) * 8 / 1e6 / secs
+		}
+		res.Bytes = n
+		res.Seconds = secs
+	} else {
+		res.Detail = "دانلود ناموفق بود: " + err.Error()
+	}
+	res.Mbps = res.DownMbps
+
+	// 3) Upload — push a few MB and time how long the far side takes to accept it.
+	uc := newClient(30 * time.Second)
+	const upBytes = 4 << 20
+	ustart := time.Now()
+	if resp, err := uc.Post("http://speed.cloudflare.com/__up", "application/octet-stream", bytes.NewReader(make([]byte, upBytes))); err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		resp.Body.Close()
+		usecs := time.Since(ustart).Seconds()
+		if usecs > 0 {
+			res.UpMbps = float64(upBytes) * 8 / 1e6 / usecs
+		}
+	}
+
+	res.OK = res.DownMbps > 0 || res.UpMbps > 0
+	// Use the best RTT as the latency input to tuning (ping avg includes jitter).
+	res.Suggest = recommendTuning(res.DownMbps, res.MinPingMS)
+	if res.OK && res.Detail == "" {
+		res.Detail = "تست سرعت کامل شد"
+	} else if !res.OK && res.Detail == "" {
+		res.Detail = "ترافیکی از تانل عبور نکرد"
+	}
+	return res, nil
+}
+
+// tuneSuggestion is config advice derived from a measurement: the MTU, per-tunnel
+// initial congestion window, and tunnel count that best fill the measured
+// bandwidth-delay product (BDP) without over-buffering. It is advisory — the
+// operator (or a future "optimize" button) writes these into the tunnel config.
+type tuneSuggestion struct {
+	MTU         int     `json:"mtu"`
+	InitialCwnd float64 `json:"initial_cwnd"`
+	TunnelCount int     `json:"tunnel_count"`
+	BDPKB       int     `json:"bdp_kb"`
+}
+
+// recommendTuning turns a throughput+latency sample into config values. The window
+// is sized to the BDP so a long-fat path stays full, then split across 2–8 tunnels,
+// each bounded by the core's per-tunnel window cap (MAX_WINDOW = 512 packets).
+func recommendTuning(downMbps, pingMS float64) tuneSuggestion {
+	const mtu = 1380         // DF-safe under 1500 and PPPoE (1492) underlays
+	const perTunnelCap = 512 // must match MAX_WINDOW in src/arq.rs
+	s := tuneSuggestion{MTU: mtu, InitialCwnd: 30, TunnelCount: 4}
+	if downMbps <= 0 || pingMS <= 0 {
+		return s
+	}
+	bdpBytes := downMbps * 1e6 / 8 * (pingMS / 1000.0)
+	s.BDPKB = int(bdpBytes / 1024)
+	pkts := bdpBytes / float64(mtu)
+
+	tunnels := int(math.Ceil(pkts / float64(perTunnelCap)))
+	if tunnels < 2 {
+		tunnels = 2
+	}
+	if tunnels > 8 {
+		tunnels = 8
+	}
+	s.TunnelCount = tunnels
+
+	// Start each tunnel at ~a quarter of its BDP share so slow-start has headroom
+	// without bursting the whole window at once; bounded to a sane range.
+	cw := math.Ceil(pkts / float64(tunnels) / 4)
+	if cw < 20 {
+		cw = 20
+	}
+	if cw > perTunnelCap {
+		cw = perTunnelCap
+	}
+	s.InitialCwnd = cw
+	return s
+}
+
+// applyTune writes the three tunable numbers into a config body.
+func applyTune(toml string, s tuneSuggestion) string {
+	toml = setTOMLNumber(toml, "mtu", strconv.Itoa(s.MTU))
+	toml = setTOMLNumber(toml, "tunnel_count", strconv.Itoa(s.TunnelCount))
+	toml = setTOMLNumber(toml, "initial_cwnd", strconv.FormatFloat(s.InitialCwnd, 'f', 1, 64))
+	return toml
+}
+
+// readTune reads the current tunables from a config body (for the "before" view).
+func readTune(toml string) tuneSuggestion {
+	s := tuneSuggestion{}
+	if v := tomlValue(toml, "mtu"); v != "" {
+		s.MTU, _ = strconv.Atoi(v)
+	}
+	if v := tomlValue(toml, "tunnel_count"); v != "" {
+		s.TunnelCount, _ = strconv.Atoi(v)
+	}
+	if v := tomlValue(toml, "initial_cwnd"); v != "" {
+		s.InitialCwnd, _ = strconv.ParseFloat(v, 64)
+	}
+	return s
+}
+
+// optimizeResult reports what an auto-optimize run measured and applied.
+type optimizeResult struct {
+	OK      bool           `json:"ok"`
+	Applied bool           `json:"applied"`
+	Before  tuneSuggestion `json:"before"`
+	After   tuneSuggestion `json:"after"`
+	Speed   speedResult    `json:"speed"`
+	Detail  string         `json:"detail,omitempty"`
+}
+
+// optimize runs the full auto-tune loop for one client tunnel: measure speed +
+// latency, compute the best MTU / congestion window / tunnel count for the path,
+// write them into both the client and matched server config, and restart the
+// tunnel so the core picks them up. It is a no-op suggestion when the measurement
+// fails (nothing is changed then).
+func (m *tunnelManager) optimize(id int) (optimizeResult, error) {
+	sp, err := m.speedTest(id) // validates running client tunnel; holds no lock during HTTP
 	if err != nil {
-		return speedResult{OK: false, Detail: "تست سرعت ناموفق بود: " + err.Error()}, nil
+		return optimizeResult{}, err
 	}
-	defer resp.Body.Close()
-	n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, 16<<20))
-	secs := time.Since(start).Seconds()
-	mbps := 0.0
-	if secs > 0 {
-		mbps = float64(n) * 8 / 1e6 / secs
+	if !sp.OK {
+		return optimizeResult{OK: false, Speed: sp, Detail: "اندازه‌گیری ناموفق بود؛ چیزی تغییر نکرد"}, nil
 	}
-	return speedResult{OK: n > 0, Mbps: mbps, Bytes: n, Seconds: secs}, nil
+	sug := sp.Suggest
+
+	m.mu.Lock()
+	in := m.inst[id]
+	if in == nil {
+		m.mu.Unlock()
+		return optimizeResult{}, errInput("لوکیشن پیدا نشد")
+	}
+	before := readTune(in.conf.TOML)
+	in.conf.TOML = applyTune(in.conf.TOML, sug)
+	if in.conf.ServerTOML != "" {
+		// Keep the matched exit-server config in step so both ends agree on MTU
+		// and tunnel count; the operator re-copies it from the server tab.
+		in.conf.ServerTOML = applyTune(in.conf.ServerTOML, sug)
+	}
+	wasRunning := in.status == "running"
+	if err := m.saveLocked(); err != nil {
+		m.mu.Unlock()
+		return optimizeResult{}, err
+	}
+	m.mu.Unlock()
+
+	res := optimizeResult{OK: true, Applied: true, Before: before, After: sug, Speed: sp}
+	if wasRunning {
+		_ = m.stop(id)
+		if err := m.start(id); err != nil {
+			res.Detail = "مقادیر ذخیره شد ولی ری‌استارت ناموفق بود: " + err.Error()
+			return res, nil
+		}
+		res.Detail = "بهینه‌سازی اعمال و تانل ری‌استارت شد؛ کانفیگ سرور را دوباره کپی کنید"
+	} else {
+		res.Detail = "بهینه‌سازی ذخیره شد؛ با فعال‌سازی تانل اعمال می‌شود"
+	}
+	return res, nil
+}
+
+// pingStats returns the minimum, the average, and the jitter (the mean absolute
+// difference between consecutive samples, RFC 3550 style) of a set of RTTs in ms.
+func pingStats(rtts []float64) (minRTT, avg, jitter float64) {
+	minRTT = rtts[0]
+	var sum float64
+	for _, r := range rtts {
+		sum += r
+		if r < minRTT {
+			minRTT = r
+		}
+	}
+	avg = sum / float64(len(rtts))
+	if len(rtts) > 1 {
+		var js float64
+		for i := 1; i < len(rtts); i++ {
+			d := rtts[i] - rtts[i-1]
+			if d < 0 {
+				d = -d
+			}
+			js += d
+		}
+		jitter = js / float64(len(rtts)-1)
+	}
+	return
 }
 
 // runningSocksAddrs returns the local SOCKS5 address of each running tunnel, so

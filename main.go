@@ -95,6 +95,7 @@ func main() {
 	mux.HandleFunc("/api/tunnels/server", s.guard(s.handleTunnelServer))
 	mux.HandleFunc("/api/tunnels/check", s.guard(s.handleTunnelCheck))
 	mux.HandleFunc("/api/tunnels/speed", s.guard(s.handleTunnelSpeed))
+	mux.HandleFunc("/api/tunnels/optimize", s.guard(s.handleTunnelOptimize))
 	mux.HandleFunc("/api/tunnels/restart", s.guard(s.handleTunnelRestart))
 	mux.HandleFunc("/api/tunnels/import", s.guard(s.handleTunnelImport))
 	mux.HandleFunc("/api/peers", s.guard(s.handlePeers))
@@ -402,7 +403,7 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "آی‌پی اسپوف لازم است؛ اول تست کنید یا دستی وارد کنید")
 			return
 		}
-		pair, err := renderCandyPair(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
+		pair, err := renderNeoPair(strings.TrimSpace(body.PeerRealIP), pool, body.SocksPort)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -590,6 +591,24 @@ func (s *server) handleTunnelSpeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.manager.speedTest(id)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleTunnelOptimize measures the tunnel, writes the best MTU / congestion
+// window / tunnel count for the path into its config, and restarts it.
+func (s *server) handleTunnelOptimize(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	id, ok := s.tunnelID(w, r)
+	if !ok {
+		return
+	}
+	res, err := s.manager.optimize(id)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

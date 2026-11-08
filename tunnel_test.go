@@ -45,9 +45,9 @@ func TestBuildTunnelConfig(t *testing.T) {
 	}
 }
 
-func TestRenderCandyPair(t *testing.T) {
+func TestRenderNeoPair(t *testing.T) {
 	pool := []string{"8.8.8.8", "1.1.1.1"}
-	pair, err := renderCandyPair("203.0.113.7", pool, 1081)
+	pair, err := renderNeoPair("203.0.113.7", pool, 1081)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,13 +71,13 @@ func TestRenderCandyPair(t *testing.T) {
 		t.Fatal("unfilled template marker remains")
 	}
 	// Empty pool is rejected.
-	if _, err := renderCandyPair("203.0.113.7", nil, 1080); err == nil {
+	if _, err := renderNeoPair("203.0.113.7", nil, 1080); err == nil {
 		t.Fatal("expected error for empty pool")
 	}
 
 	// The exit-server command carries the config and ends by launching the core.
 	cmd := serverSetupCommand(pair.ServerTOML)
-	if !strings.Contains(cmd, "CANDYEOF") || !strings.Contains(cmd, pair.PSK) {
+	if !strings.Contains(cmd, "NEOSPOOFEOF") || !strings.Contains(cmd, pair.PSK) {
 		t.Fatal("setup command missing config body")
 	}
 	if !strings.Contains(cmd, "server --config") {
@@ -86,11 +86,11 @@ func TestRenderCandyPair(t *testing.T) {
 }
 
 func TestServerTOMLHelpers(t *testing.T) {
-	cmd := "# run on the exit server\nmkdir -p ~/x && cat > ~/x/server.toml <<'CANDYEOF'\n" +
+	cmd := "# run on the exit server\nmkdir -p ~/x && cat > ~/x/server.toml <<'NEOSPOOFEOF'\n" +
 		"real_ip         = \"64.118.157.48\"\npeer_real_ip    = \"191.40.4.14\"\ndata_port       = 27161\n" +
-		"pre_shared_key  = \"abc\"\nsocks5_port     = 1080\nCANDYEOF\nsudo ./server --config ~/x/server.toml"
+		"pre_shared_key  = \"abc\"\nsocks5_port     = 1080\nNEOSPOOFEOF\nsudo ./server --config ~/x/server.toml"
 	body := extractServerTOML(cmd)
-	if strings.Contains(body, "CANDYEOF") || strings.Contains(body, "mkdir") {
+	if strings.Contains(body, "NEOSPOOFEOF") || strings.Contains(body, "mkdir") {
 		t.Fatalf("heredoc not stripped: %q", body)
 	}
 	// Body must start at the first config line, not a stray heredoc quote.
