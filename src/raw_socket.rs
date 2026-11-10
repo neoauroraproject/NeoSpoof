@@ -37,6 +37,32 @@ const ICMP_ECHO_HDR_LEN: usize = 8;
 /// IP TTL for spoofed packets.
 const SPOOF_TTL: u8 = 64;
 
+/// Socket buffer sizes. A raw socket's default receive buffer is only a few
+/// hundred KB, so at real throughput (tens of thousands of packets/sec) the
+/// kernel silently drops incoming tunnel packets before userspace can read
+/// them — the ARQ then sees that as loss, collapses the window, and the tunnel
+/// crawls. A large buffer (forced past rmem_max/wmem_max with CAP_NET_ADMIN,
+/// which the root process has) is the single biggest raw-socket throughput win.
+const RECV_BUF_BYTES: libc::c_int = 32 * 1024 * 1024;
+const SEND_BUF_BYTES: libc::c_int = 16 * 1024 * 1024;
+
+/// Set a socket buffer size, preferring the privileged `*FORCE` option (bypasses
+/// the system `rmem_max`/`wmem_max` cap) and falling back to the capped option.
+fn set_sock_buf(fd: RawFd, opt: libc::c_int, force_opt: libc::c_int, size: libc::c_int) {
+    let set = |o: libc::c_int| unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            o,
+            &size as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if set(force_opt) != 0 {
+        let _ = set(opt);
+    }
+}
+
 // ── Outgoing packet descriptor ────────────────────────────────────────────────
 
 /// A request to transmit a single spoofed packet.
@@ -90,7 +116,7 @@ impl RawSender {
     /// Spawn the background sender thread and return a `RawSender` handle.
     pub fn spawn() -> Result<Self> {
         let fd = create_raw_send_socket()?;
-        let (tx, mut rx) = mpsc::channel::<OutPacket>(4096);
+        let (tx, mut rx) = mpsc::channel::<OutPacket>(16384);
 
         // Dedicated blocking sender thread. It drains whatever is queued and sends
         // it in one `sendmmsg` syscall (up to MAX_BATCH packets), so the per-packet
@@ -144,7 +170,7 @@ impl RawReceiver {
         icmp_id:     u16,
         allowed:     Vec<Ipv4Addr>,
     ) -> Result<Self> {
-        let (tx, rx) = mpsc::channel::<InPacket>(4096);
+        let (tx, rx) = mpsc::channel::<InPacket>(65536);
 
         let udp_fd   = create_raw_recv_socket(libc::IPPROTO_UDP as libc::c_int)?;
         let icmp_fd  = create_raw_recv_socket(libc::IPPROTO_ICMP as libc::c_int)?;
@@ -201,6 +227,8 @@ fn create_raw_send_socket() -> Result<RawFd> {
             std::mem::size_of_val(&one) as libc::socklen_t,
         );
     }
+    // Large send buffer so a burst of outbound packets is not dropped locally.
+    set_sock_buf(fd, libc::SO_SNDBUF, libc::SO_SNDBUFFORCE, SEND_BUF_BYTES);
     Ok(fd)
 }
 
@@ -210,6 +238,9 @@ fn create_raw_recv_socket(proto: libc::c_int) -> Result<RawFd> {
         return Err(std::io::Error::last_os_error())
             .context("socket(AF_INET, SOCK_RAW, …) failed – CAP_NET_RAW required");
     }
+    // Large receive buffer — the key fix: the default is far too small for real
+    // throughput and causes silent kernel drops that the ARQ misreads as loss.
+    set_sock_buf(fd, libc::SO_RCVBUF, libc::SO_RCVBUFFORCE, RECV_BUF_BYTES);
     Ok(fd)
 }
 

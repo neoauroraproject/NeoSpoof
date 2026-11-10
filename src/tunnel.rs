@@ -610,6 +610,14 @@ impl TunnelManager {
                     "@@STATS@@ {{\"down_mbps\":{:.3},\"up_mbps\":{:.3},\"loss_pct\":{:.2},\"cwnd\":{:.1},\"srtt_ms\":{:.1},\"in_flight\":{},\"retx\":{},\"resets\":{},\"tunnels\":{}}}",
                     down_mbps, up_mbps, loss_pct, cwnd, srtt, agg_inflight, retx, resets, n_tun
                 );
+                // Human-readable copy for the panel's log view (so exact numbers
+                // can be read off without decoding the @@STATS@@ line).
+                if down_mbps > 0.01 || up_mbps > 0.01 || agg_inflight > 0 {
+                    log::info!(
+                        "stats: ↓{:.1} ↑{:.1} Mbps · loss {:.1}% · cwnd {:.0} · srtt {:.0}ms · inflight {} · retx {} · resets {}",
+                        down_mbps, up_mbps, loss_pct, cwnd, srtt, agg_inflight, retx, resets
+                    );
+                }
             }
 
             (exp, hbs, acks)
