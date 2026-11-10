@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const version = "2.0.0"
+const version = "2.1.0"
 
 //go:embed web
 var webFS embed.FS
@@ -38,6 +38,13 @@ type server struct {
 }
 
 func main() {
+	// A bare terminal run (or `neospoof menu` / `neospoof reset-password`) opens
+	// the interactive management menu instead of serving. The systemd service
+	// always passes flags, so it continues straight to the panel below.
+	if maybeRunMenu() {
+		return
+	}
+
 	dataDir := flag.String("data", "data", "data directory (password, settings, license, tunnels)")
 	reset := flag.Bool("reset-password", false, "generate a new random password")
 	addr := flag.String("addr", "0.0.0.0", "listen address")
@@ -73,7 +80,7 @@ func main() {
 	}
 	// Let the license check fall back through the panel's own running tunnels.
 	lic.proxyFn = mgr.runningSocksAddrs
-	ln, boundPort, err := listen(*addr, *port)
+	ln, boundPort, err := listenStable(*addr, *port, *dataDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -101,6 +108,8 @@ func main() {
 	mux.HandleFunc("/api/tunnels/check", s.guard(s.handleTunnelCheck))
 	mux.HandleFunc("/api/tunnels/speed", s.guard(s.handleTunnelSpeed))
 	mux.HandleFunc("/api/tunnels/optimize", s.guard(s.handleTunnelOptimize))
+	mux.HandleFunc("/api/tunnels/tune", s.guard(s.handleTunnelTune))
+	mux.HandleFunc("/api/tunnels/stats", s.guard(s.handleTunnelStats))
 	mux.HandleFunc("/api/tunnels/restart", s.guard(s.handleTunnelRestart))
 	mux.HandleFunc("/api/tunnels/import", s.guard(s.handleTunnelImport))
 	mux.HandleFunc("/api/peers", s.guard(s.handlePeers))
@@ -628,6 +637,69 @@ func (s *server) handleTunnelOptimize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// handleTunnelTune reads (GET ?id=) or writes (POST) one tunnel's manual tunables
+// — MTU, tunnel count, initial congestion window — plus its auto-optimize flag.
+// A POST clamps the values, writes them into the client and matched server
+// config, and restarts the tunnel when it was running.
+func (s *server) handleTunnelTune(w http.ResponseWriter, r *http.Request) {
+	if !s.requireLicense(w) {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
+		cur, auto, err := s.manager.tune(id)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		cfg := s.settings.get()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":       true,
+			"tune":     tuneJSON(cur, auto),
+			"defaults": tuneSuggestion{MTU: cfg.MTU, TunnelCount: cfg.TunnelCount, InitialCwnd: cfg.InitialCwnd},
+		})
+	case http.MethodPost:
+		var body struct {
+			ID          int     `json:"id"`
+			MTU         int     `json:"mtu"`
+			TunnelCount int     `json:"tunnel_count"`
+			InitialCwnd float64 `json:"initial_cwnd"`
+			Auto        bool    `json:"auto"`
+		}
+		if err := readJSON(r, &body, 1<<16); err != nil {
+			writeErr(w, http.StatusBadRequest, "درخواست نامعتبر است")
+			return
+		}
+		sug, restarted, err := s.manager.setTune(body.ID, body.MTU, body.TunnelCount, body.InitialCwnd, body.Auto)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":        true,
+			"tune":      tuneJSON(sug, body.Auto),
+			"restarted": restarted,
+		})
+	default:
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleTunnelStats returns the latest live telemetry (throughput, loss, cwnd,
+// srtt, in-flight, retransmits, resets) for every tunnel, merged with ping/jitter
+// from the last speed test and the age of the newest sample.
+func (s *server) handleTunnelStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLicense(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stats": s.manager.statsAll()})
+}
+
 // handleTunnelCheck sends a real request out through one tunnel's SOCKS5 proxy
 // and reports whether traffic actually passes, with latency and the exit IP.
 func (s *server) handleTunnelCheck(w http.ResponseWriter, r *http.Request) {
@@ -867,6 +939,39 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// listenStable keeps the panel reachable at the SAME port across restarts and
+// in-place updates (the systemd service restarts on every update). A fixed
+// -port always wins. Otherwise the first run picks a free random port and
+// remembers it in <dataDir>/panel.port; every later start reuses it, so the
+// login URL never changes out from under the operator. If the remembered port
+// is taken, it falls back to a fresh random one and remembers that instead.
+func listenStable(addr string, port int, dataDir string) (net.Listener, int, error) {
+	portFile := filepath.Join(dataDir, "panel.port")
+	remember := func(p int) {
+		_ = os.WriteFile(portFile, []byte(strconv.Itoa(p)), 0600)
+	}
+	if port != 0 {
+		ln, bound, err := listen(addr, port)
+		if err == nil {
+			remember(bound)
+		}
+		return ln, bound, err
+	}
+	if raw, err := os.ReadFile(portFile); err == nil {
+		if saved, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && saved > 0 && saved < 65536 {
+			if ln, bound, err := listen(addr, saved); err == nil {
+				return ln, bound, nil
+			}
+			// Remembered port is busy/unavailable — fall through to a new one.
+		}
+	}
+	ln, bound, err := listen(addr, 0)
+	if err == nil {
+		remember(bound)
+	}
+	return ln, bound, err
 }
 
 func listen(addr string, port int) (net.Listener, int, error) {

@@ -76,7 +76,7 @@ function toast(msg, kind) {
   txt.textContent = msg;
   el.append(ic.firstChild, txt);
   box.appendChild(el);
-  setTimeout(() => { el.style.opacity = "0"; setTimeout(() => el.remove(), 250); }, 3600);
+  setTimeout(() => { el.classList.add("is-out"); setTimeout(() => el.remove(), 250); }, 3600);
 }
 
 /* ===== screens ===== */
@@ -274,7 +274,7 @@ $("list-ips").addEventListener("input", () => {
   const n = countIPs($("list-ips").value);
   const el = $("list-count");
   el.textContent = fa(n) + " آی‌پی";
-  el.style.color = n > 1000 ? "var(--bad)" : "var(--muted)";
+  el.classList.toggle("c-bad", n > 1000);
 });
 
 /* ===== start / stop ===== */
@@ -332,8 +332,7 @@ async function copyText(text) {
   try {
     const ta = document.createElement("textarea");
     ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
+    ta.className = "clip-temp";
     document.body.appendChild(ta);
     ta.focus();
     ta.select();
@@ -412,6 +411,7 @@ $("build-tunnel").addEventListener("click", () => {
   if (!ips.length) { toast("آی‌پی بازی برای تانل نیست", "err"); return; }
   $("tn-ips").value = ips.join("\n");
   selectView("tunnels");
+  openModal("tn-create-modal");
   toast("آی‌پی‌های باز منتقل شد — نام و آی‌پی مقصد را بزن و «افزودن تانل»", "info");
   $("tn-name").focus();
 });
@@ -550,7 +550,7 @@ function renderServerInfo(me) {
   add("سیستم‌عامل", me.platform || "—");
   const dt = document.createElement("dt"); dt.textContent = "آماده برای بسته خام";
   const dd = document.createElement("dd"); dd.textContent = me.raw_ready ? "بله" : "خیر";
-  dd.style.color = me.raw_ready ? "var(--ok)" : "var(--bad)";
+  dd.className = me.raw_ready ? "c-ok" : "c-bad";
   dl.append(dt, dd);
   add("مدت گوش دادن", fa(me.listen_seconds) + " ثانیه");
   add("نرخ ارسال", fa(me.packets_per_sec) + " بسته/ثانیه");
@@ -558,7 +558,7 @@ function renderServerInfo(me) {
   const ldt = document.createElement("dt"); ldt.textContent = "لایسنس";
   const ldd = document.createElement("dd");
   ldd.textContent = lic.activated ? (lic.active ? "فعال" : "منقضی") : (lic.trial ? "نسخه آزمایشی" : "غیرفعال");
-  ldd.style.color = (lic.activated && lic.active) ? "var(--ok)" : (lic.trial ? "var(--warn)" : "var(--bad)");
+  ldd.className = (lic.activated && lic.active) ? "c-ok" : (lic.trial ? "c-warn" : "c-bad");
   dl.append(ldt, ldd);
   if (lic.plan) add("پلن", lic.plan);
   if (lic.bound_ip) add("قفل‌شده روی", lic.bound_ip);
@@ -758,29 +758,375 @@ function applyFilter(view) {
   });
 }
 
-/* ===== tunnels (activation) ===== */
-const tn = { listTimer: 0, logsTimer: 0, logsId: 0, checks: {}, speeds: {} };
+/* ===== tunnels (per-tunnel workspace) ===== */
+const tn = { listTimer: 0, statsTimer: 0, logsTimer: 0, logsOpen: false, sel: 0, list: [], checks: {}, speeds: {}, stats: {}, spark: {}, tuneCache: {} };
 const TN_STATUS = { running: "فعال", stopped: "متوقف", error: "خطا" };
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const round1 = (x) => Math.round((x || 0) * 10) / 10;
+
+/* sub-switch: workspace vs port-forward */
+document.querySelectorAll('#view-tunnels > .subswitch [data-tnsub]').forEach((b) => {
+  b.addEventListener("click", () => {
+    const sub = b.dataset.tnsub;
+    document.querySelectorAll('#view-tunnels > .subswitch [data-tnsub]').forEach((x) => x.setAttribute("aria-selected", String(x === b)));
+    $("tn-work").hidden = sub !== "work";
+    $("tn-fwd").hidden = sub !== "fwd";
+  });
+});
+
+/* modals */
+function openModal(id) { const m = $(id); if (m) m.hidden = false; }
+function closeModal(id) { const m = $(id); if (m) m.hidden = true; }
+document.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => closeModal(el.dataset.close)));
+["tn-new-btn", "tn-empty-new"].forEach((id) => { const e = $(id); if (e) e.addEventListener("click", () => openModal("tn-create-modal")); });
+["tn-import-btn", "tn-empty-import"].forEach((id) => { const e = $(id); if (e) e.addEventListener("click", () => openModal("tn-import-modal")); });
 
 function startTunnels() {
   loadTunnels();
-  if (!tn.listTimer) tn.listTimer = setInterval(loadTunnels, 3000);
+  if (!tn.listTimer) tn.listTimer = setInterval(loadTunnels, 4000);
+  if (!tn.statsTimer) tn.statsTimer = setInterval(pollTnStats, 1500);
 }
 function stopTunnels() {
   clearInterval(tn.listTimer); tn.listTimer = 0;
-  clearInterval(tn.logsTimer); tn.logsTimer = 0; tn.logsId = 0;
-  $("tn-logs-card").hidden = true;
-  $("tn-server-card").hidden = true;
+  clearInterval(tn.statsTimer); tn.statsTimer = 0;
+  clearInterval(tn.logsTimer); tn.logsTimer = 0; tn.logsOpen = false;
 }
 async function loadTunnels() {
   if (document.hidden) return;
   try {
     const d = await api("/api/tunnels");
-    renderTunnels(d.tunnels || []);
-    fillFwdTunnelSelect(d.tunnels || []);
+    tn.list = d.tunnels || [];
+    if (!tn.sel || !tn.list.some((t) => t.id === tn.sel)) tn.sel = tn.list.length ? tn.list[0].id : 0;
+    renderSwitcher();
+    renderWorkspace();
+    fillFwdTunnelSelect(tn.list);
     loadForwards();
   } catch (e) { /* 401/403 handled */ }
 }
+async function pollTnStats() {
+  if (document.hidden || !tn.list.length) return;
+  try { const d = await api("/api/tunnels/stats"); tn.stats = d.stats || {}; updateLive(); } catch (e) { /* ignore */ }
+}
+
+const tnById = (id) => tn.list.find((t) => t.id === id);
+function selectTunnel(id) { tn.sel = id; renderSwitcher(); renderWorkspace(); }
+
+function renderSwitcher() {
+  const bar = $("tn-switcher"), empty = $("tn-empty"), ws = $("tn-workspace");
+  if (!bar) return;
+  if (!tn.list.length) {
+    bar.replaceChildren();
+    if (empty) empty.hidden = false;
+    if (ws) ws.hidden = true;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  if (ws) ws.hidden = false;
+  bar.innerHTML = tn.list.map((t) => {
+    const on = t.id === tn.sel;
+    const role = t.role === "server" ? "اکسیت" : "ایران";
+    return `<button type="button" class="tn-pill${on ? " on" : ""} st-${t.status}" data-tnsel="${t.id}" role="tab" aria-selected="${on}">
+      <span class="tn-pill-dot"></span>
+      <span class="tn-pill-name">${esc(t.name || ("#" + t.id))}</span>
+      <span class="tn-pill-role">${role}</span>
+    </button>`;
+  }).join("");
+  bar.querySelectorAll("[data-tnsel]").forEach((b) => b.addEventListener("click", () => selectTunnel(parseInt(b.dataset.tnsel, 10))));
+}
+
+function tile(label, key, unit, arrow) {
+  return `<div class="tn-tile tn-tile-${key}">
+    <div class="tn-tile-top"><span class="tn-tile-label">${label}</span><span class="tn-tile-arrow">${arrow}</span></div>
+    <div class="tn-tile-val"><span id="tn-t-${key}">—</span><span class="tn-tile-unit">${unit}</span></div>
+  </div>`;
+}
+function op(name, label, danger) {
+  return `<button type="button" class="tn-op${danger ? " danger" : ""}" data-op="${name}">${label}</button>`;
+}
+
+function renderWorkspace() {
+  const ws = $("tn-workspace");
+  if (!ws) return;
+  const t = tnById(tn.sel);
+  if (!t) { ws.innerHTML = ""; return; }
+  const server = t.role === "server";
+  const running = t.status === "running";
+  const statusFa = TN_STATUS[t.status] || t.status;
+
+  ws.innerHTML = `
+  <section class="card tn-head">
+    <div class="tn-head-main">
+      <span class="tn-status-dot st-${t.status}"></span>
+      <div class="tn-head-text">
+        <h2>${esc(t.name || ("#" + t.id))}</h2>
+        <div class="tn-sub muted">${server ? "تانل سرور (اکسیت)" : "SOCKS 127.0.0.1:" + t.socks_port} · ${esc(t.peer_real_ip || "—")}</div>
+      </div>
+    </div>
+    <span class="tn-badge st-${t.status}">${statusFa}</span>
+  </section>
+
+  ${server ? `
+  <section class="card tn-serverbox">
+    <p class="muted lead">این یک تانل <b>سرور (اکسیت)</b> است؛ پروکسی و تست سرعت ندارد. فقط اجرا، ری‌استارت و لاگ دارد.</p>
+  </section>` : `
+  <section class="card tn-live">
+    <div class="tn-tiles">
+      ${tile("دانلود", "down", "Mbps", "↓")}
+      ${tile("آپلود", "up", "Mbps", "↑")}
+      ${tile("پینگ", "ping", "ms", "")}
+      ${tile("جیتر", "jitter", "ms", "")}
+    </div>
+    <svg class="tn-spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline id="tn-spark-line" points=""></polyline></svg>
+    <div class="tn-chips" id="tn-chips"></div>
+    <div class="tn-exit muted" id="tn-exit"></div>
+  </section>`}
+
+  <section class="card tn-ops">
+    <h3>عملیات</h3>
+    <div class="tn-ops-grid">
+      ${running ? op("stop", "توقف") : op("start", "فعال‌سازی")}
+      ${op("restart", "ری‌استارت")}
+      ${server ? "" : op("check", "بررسی عبور")}
+      ${server ? "" : op("speed", "تست سرعت")}
+      ${server ? "" : op("optimize", "بهینه‌سازی خودکار")}
+      ${op("logs", "لاگ")}
+      ${server ? "" : op("server", "دستور سرور")}
+      ${op("delete", "حذف", true)}
+    </div>
+    <div id="tn-op-result" class="tn-op-result" hidden></div>
+  </section>
+
+  ${server ? "" : `
+  <section class="card tn-auto">
+    <div class="row spread">
+      <h3>تنظیمات خودکار این تانل</h3>
+      <label class="tn-toggle"><input type="checkbox" id="tn-auto-on"><span class="tn-switch"></span><span>بهینه‌سازی خودکار</span></label>
+    </div>
+    <p class="muted">فقط روی همین تانل اعمال می‌شود. «بهینه‌سازی خودکار» را روشن کنی، پنل خودش MTU/پنجره/تعداد تونل را با سرعت مسیر تنظیم می‌کند.</p>
+    <div class="grid2 tn-tune-grid">
+      <label>MTU<input id="tn-tune-mtu" type="number" class="ltr" min="576" max="1500" step="10"></label>
+      <label>تعداد تونل موازی<input id="tn-tune-tc" type="number" class="ltr" min="1" max="16" step="1"></label>
+      <label>پنجرهٔ ازدحام اولیه<input id="tn-tune-cwnd" type="number" class="ltr" min="1" max="512" step="1"></label>
+    </div>
+    <div class="row">
+      <button class="cta" id="tn-tune-save" type="button">اعمال</button>
+      <button class="ghost" id="tn-tune-auto" type="button">بهینه‌سازی خودکار الان</button>
+      <span class="tn-tune-info muted" id="tn-tune-info"></span>
+    </div>
+  </section>`}
+
+  <section class="card tn-logs-card" id="tn-logs-wrap" hidden>
+    <div class="row spread"><h3>لاگ لوکیشن</h3><button class="icon-only" id="tn-logs-hide" type="button" aria-label="بستن">✕</button></div>
+    <pre class="logbox ltr" id="tn-logs">— بدون لاگ —</pre>
+  </section>
+
+  <section class="card tn-server-card" id="tn-server-wrap" hidden>
+    <div class="row spread"><h3>دستور سرور خارج</h3><button class="icon-only" id="tn-server-hide" type="button" aria-label="بستن">✕</button></div>
+    <p class="muted lead">این متن را روی سرور مقصد در بخش «افزودن سرور از کانفیگ» بگذار، یا این دستور را آنجا در ترمینال اجرا کن. پورت و کلید حفظ می‌شوند.</p>
+    <label>دستور آماده<textarea id="tn-server-cmd" class="ltr" readonly rows="8"></textarea></label>
+    <textarea id="tn-server-toml" hidden></textarea>
+    <div class="actions">
+      <button class="primary" id="tn-server-copy" type="button">کپی دستور</button>
+      <button class="ghost" id="tn-server-dl" type="button">دانلود server.toml</button>
+    </div>
+  </section>`;
+
+  ws.querySelectorAll("[data-op]").forEach((b) => b.addEventListener("click", () => tnOp(b.dataset.op, t.id, b)));
+  const lh = $("tn-logs-hide"); if (lh) lh.onclick = () => { $("tn-logs-wrap").hidden = true; tn.logsOpen = false; clearInterval(tn.logsTimer); tn.logsTimer = 0; };
+  if (!server) {
+    wireTune(t);
+    const sh = $("tn-server-hide"); if (sh) sh.onclick = () => { $("tn-server-wrap").hidden = true; };
+    const sc = $("tn-server-copy"); if (sc) sc.onclick = async () => { const ok = await copyText($("tn-server-cmd").value); toast(ok ? "دستور کپی شد" : "کپی نشد", ok ? "ok" : "err"); };
+    const sd = $("tn-server-dl"); if (sd) sd.onclick = () => downloadText($("tn-server-toml").value, "server.toml");
+  }
+  updateLive();
+}
+
+function updateLive() {
+  const t = tnById(tn.sel);
+  if (!t || t.role === "server") return;
+  const s = tn.stats[String(tn.sel)] || {};
+  const sp = tn.speeds[tn.sel] || {};
+  const setT = (k, v) => { const el = $("tn-t-" + k); if (el) el.textContent = v; };
+  const down = s.down_mbps != null ? s.down_mbps : (sp.down_mbps != null ? sp.down_mbps : (sp.mbps || 0));
+  const up = s.up_mbps != null ? s.up_mbps : (sp.up_mbps || 0);
+  const ping = s.ping_ms || sp.ping_ms || 0;
+  const jit = s.jitter_ms || sp.jitter_ms || 0;
+  setT("down", down ? fa(round1(down)) : "—");
+  setT("up", up ? fa(round1(up)) : "—");
+  setT("ping", ping ? fa(Math.round(ping)) : "—");
+  setT("jitter", jit ? fa(Math.round(jit)) : "—");
+  const chips = $("tn-chips");
+  if (chips) {
+    const parts = [];
+    if (s.loss_pct != null) parts.push(["loss", fa(round1(s.loss_pct)) + "٪"]);
+    if (s.cwnd != null) parts.push(["cwnd", fa(Math.round(s.cwnd))]);
+    if (s.srtt_ms != null) parts.push(["srtt", fa(Math.round(s.srtt_ms)) + "ms"]);
+    if (s.retx != null) parts.push(["retx", fa(s.retx)]);
+    if (s.resets) parts.push(["reset", fa(s.resets)]);
+    chips.innerHTML = parts.map(([k, v]) => `<span class="chip"><span class="muted">${k}</span> <b>${v}</b></span>`).join("");
+  }
+  const ex = $("tn-exit");
+  if (ex) { const c = tn.checks[tn.sel]; ex.textContent = (c && c.exit_ip) ? ("آی‌پی خروجی: " + c.exit_ip) : ""; }
+  const a = tn.spark[tn.sel] || (tn.spark[tn.sel] = []);
+  a.push(down || 0); if (a.length > 40) a.shift();
+  const line = $("tn-spark-line");
+  if (line && a.length > 1) {
+    const max = Math.max(1, ...a);
+    line.setAttribute("points", a.map((v, i) => (i / (a.length - 1) * 100).toFixed(1) + "," + (30 - (v / max) * 27).toFixed(1)).join(" "));
+  }
+}
+
+async function tnOp(opName, id, btn) {
+  if (opName === "delete") { if (!confirm("این تانل حذف شود؟")) return; return tnAction("delete", id); }
+  if (opName === "start" || opName === "stop" || opName === "restart") return tnAction(opName, id);
+  if (opName === "check") return checkTunnel(id, btn);
+  if (opName === "speed") return speedTunnel(id, btn);
+  if (opName === "optimize") return optimizeTunnel(id, btn);
+  if (opName === "logs") return toggleLogs(id);
+  if (opName === "server") return openServerCmd(id);
+}
+async function tnAction(path, id) {
+  try {
+    const d = await api("/api/tunnels/" + path, { method: "POST", body: { id } });
+    tn.list = d.tunnels || tn.list;
+    if (!tn.list.some((t) => t.id === tn.sel)) tn.sel = tn.list.length ? tn.list[0].id : 0;
+    renderSwitcher(); renderWorkspace();
+  } catch (e) { toast(e.message, "err"); }
+}
+function withBtn(btn, busy, fn) {
+  const old = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = busy; }
+  return Promise.resolve().then(fn).catch((e) => opResult(e.message, false)).finally(() => { if (btn) { btn.disabled = false; btn.textContent = old; } });
+}
+function opResult(msg, ok) {
+  const el = $("tn-op-result"); if (!el) return;
+  el.hidden = false; el.textContent = msg; el.className = "tn-op-result " + (ok ? "ok" : "bad");
+}
+function checkTunnel(id, btn) {
+  return withBtn(btn, "در حال بررسی…", async () => {
+    const r = await api("/api/tunnels/check", { method: "POST", body: { id } });
+    tn.checks[id] = r;
+    opResult(r.ok ? ("عبور ✓ " + fa(r.latency_ms) + "ms" + (r.exit_ip ? " · خروجی " + r.exit_ip : "")) : ("عبور ✗ " + (r.detail || "")), r.ok);
+    updateLive();
+  });
+}
+function speedTunnel(id, btn) {
+  return withBtn(btn, "در حال تست…", async () => {
+    const r = await api("/api/tunnels/speed", { method: "POST", body: { id } });
+    tn.speeds[id] = r;
+    const dn = round1(r.down_mbps != null ? r.down_mbps : (r.mbps || 0)), up = round1(r.up_mbps || 0);
+    opResult("سرعت: ↓" + fa(dn) + " ↑" + fa(up) + " Mbps · پینگ " + fa(Math.round(r.ping_ms || 0)) + "ms · جیتر " + fa(Math.round(r.jitter_ms || 0)) + "ms", r.ok !== false);
+    updateLive();
+  });
+}
+function optimizeTunnel(id, btn) {
+  return withBtn(btn, "در حال بهینه‌سازی…", async () => {
+    const r = await api("/api/tunnels/optimize", { method: "POST", body: { id } });
+    if (r && r.ok && r.after) {
+      if (r.speed) tn.speeds[id] = r.speed;
+      opResult("بهینه شد: MTU " + fa(r.after.mtu) + " · پنجره " + fa(Math.round(r.after.initial_cwnd)) + " · " + fa(r.after.tunnel_count) + " تونل", true);
+      loadTune(id);
+    } else opResult((r && r.detail) ? r.detail : "بهینه‌سازی انجام نشد", false);
+    updateLive();
+  });
+}
+function toggleLogs(id) {
+  const wrap = $("tn-logs-wrap");
+  if (!wrap) return;
+  if (tn.logsOpen) { wrap.hidden = true; tn.logsOpen = false; clearInterval(tn.logsTimer); tn.logsTimer = 0; return; }
+  wrap.hidden = false; tn.logsOpen = true;
+  pollLogs(id);
+  tn.logsTimer = setInterval(() => pollLogs(id), 1500);
+  wrap.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+async function pollLogs(id) {
+  if (document.hidden) return;
+  try { const d = await api("/api/tunnels/logs?id=" + id); const el = $("tn-logs"); if (el) el.textContent = (d.logs || []).join("\n") || "— بدون لاگ —"; } catch (e) { /* ignore */ }
+}
+async function openServerCmd(id) {
+  try {
+    const d = await api("/api/tunnels/server?id=" + id);
+    const w = $("tn-server-wrap"); if (!w) return;
+    $("tn-server-cmd").value = d.command || "";
+    $("tn-server-toml").value = d.server_toml || "";
+    w.hidden = false; w.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* per-tunnel auto settings */
+async function loadTune(id) {
+  try {
+    const d = await api("/api/tunnels/tune?id=" + id);
+    tn.tuneCache[id] = d;
+    const t = d.tune || {};
+    if ($("tn-tune-mtu")) $("tn-tune-mtu").value = t.mtu || "";
+    if ($("tn-tune-tc")) $("tn-tune-tc").value = t.tunnel_count || "";
+    if ($("tn-tune-cwnd")) $("tn-tune-cwnd").value = Math.round(t.initial_cwnd || 0) || "";
+    if ($("tn-auto-on")) $("tn-auto-on").checked = !!t.auto;
+    const info = $("tn-tune-info"); if (info) info.textContent = t.bdp_kb ? ("BDP ~" + fa(t.bdp_kb) + "KB") : "";
+  } catch (e) { /* ignore */ }
+}
+function wireTune(t) {
+  loadTune(t.id);
+  const save = $("tn-tune-save"); if (save) save.onclick = () => saveTune(t.id, false);
+  const autoNow = $("tn-tune-auto"); if (autoNow) autoNow.onclick = (e) => optimizeTunnel(t.id, e.currentTarget);
+  const auto = $("tn-auto-on"); if (auto) auto.onchange = () => saveTune(t.id, true);
+}
+async function saveTune(id, silent) {
+  try {
+    const body = {
+      id,
+      mtu: parseInt($("tn-tune-mtu").value, 10) || 0,
+      tunnel_count: parseInt($("tn-tune-tc").value, 10) || 0,
+      initial_cwnd: parseFloat($("tn-tune-cwnd").value) || 0,
+      auto: $("tn-auto-on").checked
+    };
+    const d = await api("/api/tunnels/tune", { method: "POST", body });
+    if (!silent) toast("تنظیمات تانل ذخیره شد" + (d.restarted ? " و ری‌استارت شد" : ""), "ok");
+    loadTune(id);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+/* create / import (modals) */
+$("tn-create").addEventListener("click", async () => {
+  setError("tn-error", "");
+  const ips = $("tn-ips").value.split(/[\s,;]+/).filter(Boolean);
+  const btn = $("tn-create"); btn.disabled = true;
+  try {
+    const res = await api("/api/tunnels", { method: "POST", body: {
+      name: $("tn-name").value.trim(),
+      peer_real_ip: $("tn-peer").value.trim(),
+      socks_port: parseInt($("tn-socks").value, 10) || 0,
+      spoof_ips: ips
+    }});
+    $("tn-name").value = ""; $("tn-ips").value = "";
+    closeModal("tn-create-modal");
+    toast("تانل ساخته شد — دستور سرور خارج آماده است", "ok");
+    if (res && res.tunnel) tn.sel = res.tunnel.id;
+    await loadTunnels();
+    if (res && res.command) {
+      const w = $("tn-server-wrap");
+      if (w) { $("tn-server-cmd").value = res.command; $("tn-server-toml").value = res.server_toml || ""; w.hidden = false; }
+    }
+  } catch (e) { setError("tn-error", e.message); }
+  finally { btn.disabled = false; }
+});
+$("imp-save").addEventListener("click", async () => {
+  setError("imp-error", "");
+  const name = $("imp-name").value.trim();
+  const config = $("imp-config").value.trim();
+  if (!config) { setError("imp-error", "کانفیگ سرور یا دستور کامل را بگذار"); return; }
+  const btn = $("imp-save"); btn.disabled = true;
+  try {
+    await api("/api/tunnels/import", { method: "POST", body: { name, config } });
+    $("imp-name").value = ""; $("imp-config").value = "";
+    closeModal("tn-import-modal");
+    toast("سرور ذخیره و اجرا شد", "ok");
+    loadTunnels();
+  } catch (e) { setError("imp-error", e.message); }
+  finally { btn.disabled = false; }
+});
 
 /* ===== port forwarding ===== */
 const FWD_STATUS = { running: "فعال", stopped: "متوقف", error: "خطا" };
@@ -815,7 +1161,7 @@ function renderForwards(list) {
     const meta = document.createElement("div"); meta.className = "meta";
     const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
     meta.append(m("محلی", "127.0.0.1:" + f.local_port), m("← سرویس", f.target_ip + ":" + f.target_port), m("از تانل", "#" + f.tunnel_id));
-    if (f.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = f.error; meta.append(e); }
+    if (f.error) { const e = document.createElement("span"); e.className = "c-bad"; e.textContent = f.error; meta.append(e); }
     const acts = document.createElement("div"); acts.className = "actions";
     const toggle = document.createElement("button");
     if (f.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => fwdAction("stop", f.id); }
@@ -848,150 +1194,8 @@ $("fwd-add").addEventListener("click", async () => {
   } catch (e) { setError("fwd-error", e.message); }
   finally { btn.disabled = false; }
 });
-function renderTunnels(list) {
-  const box = $("tn-list");
-  box.replaceChildren();
-  if (!list.length) {
-    const p = document.createElement("p"); p.className = "muted";
-    p.textContent = "هنوز تانلی ساخته نشده. از بالا یک لوکیشن اضافه کن.";
-    box.appendChild(p);
-    return;
-  }
-  list.forEach((t) => {
-    const row = document.createElement("div"); row.className = "tn-row";
-    const head = document.createElement("div"); head.className = "row spread";
-    const title = document.createElement("h3"); title.textContent = t.name || ("#" + t.id);
-    const badge = document.createElement("span"); badge.className = "badge st-" + t.status;
-    badge.textContent = TN_STATUS[t.status] || t.status;
-    head.append(title, badge);
-
-    const isServer = t.role === "server";
-
-    const meta = document.createElement("div"); meta.className = "meta";
-    const m = (k, v) => { const s = document.createElement("span"); const b = document.createElement("b"); b.className = "ltr"; b.textContent = v; s.append(k + " ", b); return s; };
-    if (isServer) meta.append(m("نقش", "سرور (اکسیت)"), m("کلاینت", t.peer_real_ip || "—"));
-    else meta.append(m("SOCKS", "127.0.0.1:" + t.socks_port), m("مقصد", t.peer_real_ip || "—"));
-    if (t.primary) meta.append(m("آی‌پی اسپوف", t.primary));
-    if (t.pool_size) meta.append(m("تعداد اسپوف", fa(t.pool_size)));
-    if (t.data_port) meta.append(m("پورت داده", fa(t.data_port)));
-    if (t.status === "running" && t.uptime) meta.append(m("آپ‌تایم", fa(t.uptime) + "s"));
-    if (t.error) { const e = document.createElement("span"); e.style.color = "var(--bad)"; e.textContent = t.error; meta.append(e); }
-    if (!isServer) {
-      const chk = tn.checks[t.id];
-      if (chk) {
-        const e = document.createElement("span");
-        e.style.color = chk.ok ? "var(--ok)" : "var(--bad)";
-        e.textContent = chk.ok
-          ? ("عبور ✓ " + fa(chk.latency_ms) + "ms" + (chk.exit_ip ? " · خروجی " + chk.exit_ip : ""))
-          : ("عبور ✗ " + (chk.detail || ""));
-        meta.append(e);
-      }
-    }
-
-    const acts = document.createElement("div"); acts.className = "actions";
-    const toggle = document.createElement("button");
-    if (t.status === "running") { toggle.className = "ghost"; toggle.textContent = "توقف"; toggle.onclick = () => tnAction("stop", t.id); }
-    else { toggle.className = "cta"; toggle.textContent = "فعال‌سازی"; toggle.onclick = () => tnAction("start", t.id); }
-    const restart = document.createElement("button"); restart.className = "ghost"; restart.textContent = "ری‌استارت"; restart.onclick = () => tnAction("restart", t.id);
-    const logsBtn = document.createElement("button"); logsBtn.className = "ghost"; logsBtn.textContent = "لاگ"; logsBtn.onclick = () => openTnLogs(t.id);
-    const del = document.createElement("button"); del.className = "ghost"; del.textContent = "حذف";
-    del.onclick = () => { if (confirm("این تانل حذف شود؟")) tnAction("delete", t.id); };
-    if (isServer) {
-      acts.append(toggle, restart, logsBtn, del);
-    } else {
-      const srvBtn = document.createElement("button"); srvBtn.className = "ghost"; srvBtn.textContent = "دستور سرور"; srvBtn.onclick = () => openTnServer(t.id);
-      const chkBtn = document.createElement("button"); chkBtn.className = "ghost"; chkBtn.textContent = "تست عبور"; chkBtn.onclick = () => checkTunnel(t.id, chkBtn);
-      acts.append(toggle, restart, srvBtn, chkBtn, logsBtn, del);
-    }
-
-    row.append(head, meta, acts);
-    box.appendChild(row);
-  });
-}
-async function tnAction(path, id) {
-  try { const d = await api("/api/tunnels/" + path, { method: "POST", body: { id: id } }); renderTunnels(d.tunnels || []); }
-  catch (e) { toast(e.message, "err"); }
-}
-async function checkTunnel(id, btn) {
-  if (btn) { btn.disabled = true; btn.textContent = "در حال تست…"; }
-  try {
-    const r = await api("/api/tunnels/check", { method: "POST", body: { id: id } });
-    tn.checks[id] = r;
-    if (r.ok) toast("ترافیک عبور کرد — " + fa(r.latency_ms) + "ms" + (r.exit_ip ? " · خروجی " + r.exit_ip : ""), "ok");
-    else toast(r.detail || "ترافیک عبور نکرد", "err");
-    loadTunnels();
-  } catch (e) { toast(e.message, "err"); }
-  finally { if (btn) { btn.disabled = false; btn.textContent = "تست عبور"; } }
-}
-$("tn-create").addEventListener("click", async () => {
-  setError("tn-error", "");
-  const ips = $("tn-ips").value.split(/[\s,;]+/).filter(Boolean);
-  const btn = $("tn-create"); btn.disabled = true;
-  try {
-    const res = await api("/api/tunnels", { method: "POST", body: {
-      name: $("tn-name").value.trim(),
-      peer_real_ip: $("tn-peer").value.trim(),
-      socks_port: parseInt($("tn-socks").value, 10) || 0,
-      spoof_ips: ips
-    }});
-    $("tn-name").value = ""; $("tn-ips").value = "";
-    toast("تانل ساخته شد — دستور سرور خارج آماده است", "ok");
-    if (res && res.command) {
-      showTnServer({ name: (res.tunnel && res.tunnel.name) || "", command: res.command, server_toml: res.server_toml });
-    }
-    loadTunnels();
-  } catch (e) { setError("tn-error", e.message); }
-  finally { btn.disabled = false; }
-});
-$("imp-save").addEventListener("click", async () => {
-  setError("imp-error", "");
-  const name = $("imp-name").value.trim();
-  const config = $("imp-config").value.trim();
-  if (!config) { setError("imp-error", "کانفیگ سرور یا دستور کامل را بگذار"); return; }
-  const btn = $("imp-save"); btn.disabled = true;
-  try {
-    await api("/api/tunnels/import", { method: "POST", body: { name: name, config: config } });
-    $("imp-name").value = ""; $("imp-config").value = "";
-    toast("سرور ذخیره و اجرا شد", "ok");
-    loadTunnels();
-  } catch (e) { setError("imp-error", e.message); }
-  finally { btn.disabled = false; }
-});
-async function openTnServer(id) {
-  try { showTnServer(await api("/api/tunnels/server?id=" + id)); }
-  catch (e) { toast(e.message, "err"); }
-}
-function showTnServer(d) {
-  $("tn-server-name").textContent = d.name || "";
-  $("tn-server-cmd").value = d.command || "";
-  $("tn-server-toml").value = d.server_toml || "";
-  $("tn-server-card").hidden = false;
-  $("tn-server-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-$("tn-server-close").addEventListener("click", () => { $("tn-server-card").hidden = true; });
-$("tn-server-cmd-copy").addEventListener("click", async () => {
-  const ok = await copyText($("tn-server-cmd").value);
-  toast(ok ? "دستور کپی شد" : "کپی نشد", ok ? "ok" : "err");
-});
-$("tn-server-toml-dl").addEventListener("click", () => { downloadText($("tn-server-toml").value, "server.toml"); });
-function openTnLogs(id) {
-  tn.logsId = id;
-  $("tn-logs-card").hidden = false;
-  pollTnLogs();
-  if (!tn.logsTimer) tn.logsTimer = setInterval(pollTnLogs, 1500);
-  $("tn-logs-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-async function pollTnLogs() {
-  if (!tn.logsId || document.hidden) return;
-  try {
-    const d = await api("/api/tunnels/logs?id=" + tn.logsId);
-    $("tn-logs").textContent = (d.logs || []).join("\n") || "— بدون لاگ —";
-  } catch (e) { /* ignore */ }
-}
-$("tn-logs-close").addEventListener("click", () => {
-  $("tn-logs-card").hidden = true; tn.logsId = 0;
-  clearInterval(tn.logsTimer); tn.logsTimer = 0;
-});
+/* (legacy flat tunnel list + server/logs handlers removed — superseded by the
+   per-tunnel workspace defined above) */
 
 /* ===== dashboard (home) ===== */
 const dash = { listTimer: 0, checkTimer: 0 };
@@ -1057,7 +1261,7 @@ function renderDash(list) {
       tr.appendChild(td("—")); tr.appendChild(td("—")); tr.appendChild(td("—")); tr.appendChild(td("—"));
     } else {
       const passTd = document.createElement("td");
-      if (c) { passTd.textContent = c.ok ? "✓" : "✗"; passTd.style.color = c.ok ? "var(--ok)" : "var(--bad)"; passTd.title = c.detail || ""; }
+      if (c) { passTd.textContent = c.ok ? "✓" : "✗"; passTd.className = "ltr " + (c.ok ? "c-ok" : "c-bad"); passTd.title = c.detail || ""; }
       else if (t.status === "running") { passTd.textContent = "…"; passTd.className = "muted"; }
       else { passTd.textContent = "—"; }
       tr.appendChild(passTd);
@@ -1179,10 +1383,52 @@ $("peer-add").addEventListener("click", async () => {
   finally { btn.disabled = false; }
 });
 
+/* ===== demo mode (design preview, no backend) ===== */
+const DEMO = /(^|[?&])demo(=|&|$)/.test(location.search) || /(^|#)demo\b/.test(location.hash);
+if (DEMO) {
+  const demoTunnels = [
+    { id: 1, name: "آلمان ۱", role: "", status: "running", socks_port: 1080, peer_real_ip: "45.147.231.10", primary: "5.160.12.4", pool_size: 6, data_port: 41234, uptime: 5230, auto: true },
+    { id: 2, name: "فنلاند", role: "", status: "running", socks_port: 1081, peer_real_ip: "95.217.44.9", primary: "2.144.18.9", pool_size: 4, data_port: 52110, uptime: 1980, auto: false },
+    { id: 3, name: "هلند", role: "", status: "stopped", socks_port: 1082, peer_real_ip: "51.210.7.3", primary: "5.112.9.2", pool_size: 5, data_port: 33001, auto: false },
+    { id: 4, name: "سرور آلمان", role: "server", status: "running", peer_real_ip: "2.189.44.7", uptime: 8800 }
+  ];
+  const demoStats = {
+    "1": { down_mbps: 612.4, up_mbps: 358.1, loss_pct: 0.3, cwnd: 184, srtt_ms: 128, in_flight: 164, retx: 21, resets: 0, ping_ms: 128, jitter_ms: 7, running: true },
+    "2": { down_mbps: 443.0, up_mbps: 201.5, loss_pct: 0.8, cwnd: 132, srtt_ms: 152, in_flight: 120, retx: 48, resets: 0, ping_ms: 151, jitter_ms: 12, running: true }
+  };
+  const demoTune = {
+    "1": { ok: true, tune: { mtu: 1380, tunnel_count: 4, initial_cwnd: 48, auto: true, bdp_kb: 920 }, defaults: { mtu: 1380, tunnel_count: 4, initial_cwnd: 30 } },
+    "2": { ok: true, tune: { mtu: 1280, tunnel_count: 6, initial_cwnd: 64, auto: false, bdp_kb: 640 }, defaults: { mtu: 1380, tunnel_count: 4, initial_cwnd: 30 } }
+  };
+  const demoMe = { version: "2.1.0", platform: "linux", raw_ready: true, listen_seconds: 180, packets_per_sec: 50, tunnel_count: 4, mtu: 1380, initial_cwnd: 30, site_role: "source", site_name: "ایران-۱", license: { active: true, activated: true, plan: "pro", bound_ip: "2.189.44.7" } };
+  const demoPeers = [{ id: 1, name: "آلمان-۱", ip: "45.147.231.10", role: "exit" }, { id: 2, name: "فنلاند", ip: "95.217.44.9", role: "exit" }];
+  const demoFwd = [{ id: 1, name: "shadowsocks", status: "running", local_port: 8388, target_ip: "127.0.0.1", target_port: 8388, tunnel_id: 1 }];
+  const jit = (v, p) => v * (1 + (Math.random() - 0.5) * p);
+  api = function (path) {
+    path = String(path);
+    const resp = (o) => Promise.resolve(JSON.parse(JSON.stringify(o)));
+    if (path.indexOf("/api/me") === 0) return resp(demoMe);
+    if (path === "/api/tunnels") return resp({ tunnels: demoTunnels });
+    if (path === "/api/tunnels/stats") {
+      const s = {};
+      for (const k in demoStats) s[k] = Object.assign({}, demoStats[k], { down_mbps: jit(demoStats[k].down_mbps, 0.15), up_mbps: jit(demoStats[k].up_mbps, 0.2), cwnd: Math.round(jit(demoStats[k].cwnd, 0.1)) });
+      return resp({ stats: s });
+    }
+    if (path.indexOf("/api/tunnels/tune") === 0) { const id = (path.match(/id=(\d+)/) || [])[1] || "1"; return resp(demoTune[id] || demoTune["1"]); }
+    if (path.indexOf("/api/tunnels/logs") === 0) return resp({ logs: ["[info] tunnel 1 established", "[info] tunnel 1 RTT 128.0 ms", "[info] CC: slow-start → congestion-avoidance cwnd=128", "[info] send task running"] });
+    if (path.indexOf("/api/tunnels/server") === 0) return resp({ name: "demo", command: "curl -Ls https://.../install.sh | bash   # سپس «افزودن سرور از کانفیگ»", server_toml: "# server.toml (نمونه)" });
+    if (path === "/api/forwards") return resp({ forwards: demoFwd });
+    if (path === "/api/peers") return resp({ peers: demoPeers });
+    if (path === "/api/settings") return resp(demoMe);
+    if (path === "/api/test") return resp({ phase: "idle" });
+    return resp({ ok: true });
+  };
+}
+
 /* ===== boot ===== */
 applyRole("simple");
 applyRole("list");
 selectView("dash");
 api("/api/me")
-  .then((me) => { applyMe(me); gate(me); })
+  .then((me) => { applyMe(me); gate(me); if (DEMO) selectView("tunnels"); })
   .catch(() => showLogin());
