@@ -9,7 +9,8 @@
 
 use std::net::Ipv4Addr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Result};
 use bytes::Bytes;
@@ -24,6 +25,29 @@ use crate::raw_socket::{OutPacket, RawSender};
 
 const HEARTBEAT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 const HEARTBEAT_MIN_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How long a tunnel may sit with data in flight but its `send_base` frozen
+/// before the watchdog declares the path dead and tears it down. Normal
+/// transient loss recovers in a few RTOs (retransmission never gives up), so
+/// this only fires when a path has genuinely gone (e.g. the spoofed IP got
+/// filtered mid-transfer) — far better than hanging at zero throughput forever.
+const STALL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Emit one aggregated live-stats line at roughly this cadence.
+const STATS_INTERVAL_MS: u64 = 1000;
+
+/// Upper bound on the inter-packet pacing gap (ms). Pacing spreads a window
+/// over one RTT to avoid dumping it at line rate into shallow middlebox buffers;
+/// the cap keeps a tiny cwnd / unestimated RTT from stalling the sender.
+const PACING_MAX_MS: u64 = 20;
+
+/// Milliseconds since the Unix epoch (wall clock, for the stats cadence/line).
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 // ── Tunnel state ──────────────────────────────────────────────────────────────
 
@@ -54,6 +78,12 @@ struct Tunnel {
     window_notify: Arc<Notify>,
     /// Notified when the tunnel transitions to Established.
     established_notify: Arc<Notify>,
+    /// Last instant we cut cwnd for a loss. Guards against collapsing the window
+    /// more than once per RTO while a loss burst is being retransmitted.
+    last_loss_at: Option<Instant>,
+    /// Stall watchdog: the `send_base` value last seen, and when it last moved.
+    wd_last_base: u32,
+    wd_since:     Instant,
 }
 
 /// Send one coalesced ACK per this many in-order data segments (a gap forces an
@@ -82,6 +112,9 @@ impl Tunnel {
             ack_pending:   false,
             window_notify:      Arc::new(Notify::new()),
             established_notify: Arc::new(Notify::new()),
+            last_loss_at: None,
+            wd_last_base: init_seq,
+            wd_since:     Instant::now(),
         }
     }
 
@@ -154,6 +187,26 @@ struct Inner {
     sender:  RawSender,
     addr:    PeerAddr,
     cfg:     Arc<Config>,
+    /// Live-stats counters, aggregated across all tunnels of this core process.
+    /// Printed once per `STATS_INTERVAL_MS` as a `@@STATS@@ {json}` line that the
+    /// Go panel parses for the live per-tunnel readout.
+    stats: Stats,
+}
+
+/// Monotonic counters + delta bookkeeping for the live-stats line.
+#[derive(Default)]
+struct Stats {
+    bytes_down: AtomicU64,
+    bytes_up:   AtomicU64,
+    pkts_sent:  AtomicU64,
+    pkts_retx:  AtomicU64,
+    resets:     AtomicU64,
+    // Previous snapshot (for per-interval deltas) and last emit time (unix ms).
+    prev_down:  AtomicU64,
+    prev_up:    AtomicU64,
+    prev_sent:  AtomicU64,
+    prev_retx:  AtomicU64,
+    last_ms:    AtomicU64,
 }
 
 /// Manages all active tunnels.  Cheaply cloneable (`Arc` inside).
@@ -162,12 +215,15 @@ pub struct TunnelManager(Arc<Inner>);
 
 impl TunnelManager {
     pub fn new(sender: RawSender, addr: PeerAddr, cfg: Arc<Config>) -> Self {
+        let stats = Stats::default();
+        stats.last_ms.store(now_unix_ms(), Ordering::Relaxed);
         Self(Arc::new(Inner {
             tunnels:               DashMap::new(),
             established_notifiers: DashMap::new(),
             sender,
             addr,
             cfg,
+            stats,
         }))
     }
 
@@ -330,6 +386,7 @@ impl TunnelManager {
             PacketKind::Nack => {
                 if let Some(retransmit) = t.arq.process_nack(pkt.seq) {
                     drop(t);
+                    self.0.stats.pkts_retx.fetch_add(1, Ordering::Relaxed);
                     self.tx_data(retransmit).await?;
                     return Ok(None);
                 }
@@ -354,6 +411,11 @@ impl TunnelManager {
                     t.ack_pending = true;
                 }
                 drop(t);
+
+                let down_bytes: u64 = deliverable.iter().map(|b| b.len() as u64).sum();
+                if down_bytes > 0 {
+                    self.0.stats.bytes_down.fetch_add(down_bytes, Ordering::Relaxed);
+                }
 
                 for payload in deliverable {
                     if app_tx.send(payload).await.is_err() {
@@ -420,6 +482,13 @@ impl TunnelManager {
             let mut dead = Vec::new();
             let now = Instant::now();
 
+            // Live-stats aggregation across all tunnels of this process.
+            let mut agg_inflight: u64 = 0;
+            let mut agg_cwnd: f64 = 0.0;
+            let mut agg_srtt: f64 = 0.0;
+            let mut n_est: u64 = 0;
+            let mut n_tun: u64 = 0;
+
             let tunnels: Vec<(u32, Arc<Mutex<Tunnel>>)> = self
                 .0
                 .tunnels
@@ -434,11 +503,50 @@ impl TunnelManager {
                     dead.push(id);
                     continue;
                 }
+
+                // ── Stall watchdog ────────────────────────────────────────────
+                // Track send_base; while data is in flight it must keep moving.
+                // If it freezes for STALL_TIMEOUT the path is dead (e.g. the
+                // spoofed source got filtered mid-transfer) — tear the tunnel
+                // down so its connection fails fast instead of hanging at zero.
+                let base = t.arq.send_base();
+                if base != t.wd_last_base {
+                    t.wd_last_base = base;
+                    t.wd_since = now;
+                }
+                let inflight = t.arq.in_flight();
+                if t.state == TunnelState::Established
+                    && inflight > 0
+                    && now.duration_since(t.wd_since) >= STALL_TIMEOUT
+                {
+                    log::warn!(
+                        "tunnel {} stalled {:?} with {} in flight – resetting (dead path)",
+                        id, STALL_TIMEOUT, inflight
+                    );
+                    t.state = TunnelState::Closed;
+                    self.0.stats.resets.fetch_add(1, Ordering::Relaxed);
+                    dead.push(id);
+                    continue;
+                }
+
+                // ── Retransmission (never gives up; see arq.rs) ───────────────
                 let timed_out = t.arq.take_timed_out();
                 if !timed_out.is_empty() {
-                    t.on_loss();
+                    // Collapse cwnd at most once per RTO so a loss burst that
+                    // expires many slots across consecutive ticks does not pin
+                    // the window at 1 and starve throughput.
+                    let rto = t.cc.rtt.rto;
+                    let react = t
+                        .last_loss_at
+                        .map_or(true, |at| now.duration_since(at) >= rto);
+                    if react {
+                        t.on_loss();
+                        t.last_loss_at = Some(now);
+                    }
+                    self.0.stats.pkts_retx.fetch_add(timed_out.len() as u64, Ordering::Relaxed);
                     exp.extend(timed_out);
                 }
+
                 if t.state == TunnelState::Established
                     && t.is_idle(HEARTBEAT_IDLE_TIMEOUT)
                     && now.duration_since(t.last_heartbeat_sent) >= HEARTBEAT_MIN_INTERVAL
@@ -453,12 +561,57 @@ impl TunnelManager {
                     t.ack_pending = false;
                     t.unacked_since = 0;
                 }
+
+                // ── Stats snapshot ────────────────────────────────────────────
+                n_tun += 1;
+                agg_inflight += t.arq.in_flight() as u64;
+                agg_cwnd += t.cc.cwnd;
+                if t.cc.rtt.srtt_ms() > 0.0 {
+                    agg_srtt += t.cc.rtt.srtt_ms();
+                    n_est += 1;
+                }
             }
 
             for id in &dead {
                 self.0.tunnels.remove(id);
                 self.0.established_notifiers.remove(id);
             }
+
+            // ── Live-stats line (~1 Hz) ──────────────────────────────────────
+            // One aggregated `@@STATS@@ {json}` line per process that the Go
+            // panel parses for the per-tunnel live readout. Observability only —
+            // it never touches the data plane.
+            let now_ms = now_unix_ms();
+            let last_ms = self.0.stats.last_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last_ms) >= STATS_INTERVAL_MS {
+                self.0.stats.last_ms.store(now_ms, Ordering::Relaxed);
+                let dt = ((now_ms.saturating_sub(last_ms)) as f64 / 1000.0).max(0.001);
+
+                let down = self.0.stats.bytes_down.load(Ordering::Relaxed);
+                let up   = self.0.stats.bytes_up.load(Ordering::Relaxed);
+                let sent = self.0.stats.pkts_sent.load(Ordering::Relaxed);
+                let retx = self.0.stats.pkts_retx.load(Ordering::Relaxed);
+
+                let d_down = down.saturating_sub(self.0.stats.prev_down.swap(down, Ordering::Relaxed));
+                let d_up   = up.saturating_sub(self.0.stats.prev_up.swap(up, Ordering::Relaxed));
+                let d_sent = sent.saturating_sub(self.0.stats.prev_sent.swap(sent, Ordering::Relaxed));
+                let d_retx = retx.saturating_sub(self.0.stats.prev_retx.swap(retx, Ordering::Relaxed));
+
+                let down_mbps = d_down as f64 * 8.0 / dt / 1e6;
+                let up_mbps   = d_up as f64 * 8.0 / dt / 1e6;
+                let loss_pct  = if d_sent + d_retx > 0 {
+                    d_retx as f64 / (d_sent + d_retx) as f64 * 100.0
+                } else { 0.0 };
+                let cwnd = if n_tun > 0 { agg_cwnd / n_tun as f64 } else { 0.0 };
+                let srtt = if n_est > 0 { agg_srtt / n_est as f64 } else { 0.0 };
+                let resets = self.0.stats.resets.load(Ordering::Relaxed);
+
+                println!(
+                    "@@STATS@@ {{\"down_mbps\":{:.3},\"up_mbps\":{:.3},\"loss_pct\":{:.2},\"cwnd\":{:.1},\"srtt_ms\":{:.1},\"in_flight\":{},\"retx\":{},\"resets\":{},\"tunnels\":{}}}",
+                    down_mbps, up_mbps, loss_pct, cwnd, srtt, agg_inflight, retx, resets, n_tun
+                );
+            }
+
             (exp, hbs, acks)
         };
 
@@ -551,6 +704,24 @@ impl TunnelManager {
                         return;
                     }
                     offset = end;
+
+                    // Pace the next packet by srtt/cwnd so a whole window is not
+                    // dumped at line rate into shallow middlebox buffers on the
+                    // spoofed path — that burst was what overran the buffer and
+                    // triggered correlated loss → AIMD collapse. Sub-millisecond
+                    // for a healthy large cwnd (no effect on fast paths); capped
+                    // so a tiny cwnd / unestimated RTT can't stall the sender.
+                    let pace_ms = {
+                        if let Some(tunnel) = this.0.tunnels.get(&tunnel_id).map(|t| t.clone()) {
+                            tunnel.lock().await.cc.pacing_interval_ms()
+                        } else {
+                            0.0
+                        }
+                    };
+                    if pace_ms >= 1.0 {
+                        let ms = (pace_ms as u64).min(PACING_MAX_MS);
+                        tokio::time::sleep(Duration::from_millis(ms)).await;
+                    }
                 }
             }
             log::debug!("send task for tunnel {} finished", tunnel_id);
@@ -558,6 +729,7 @@ impl TunnelManager {
     }
 
     async fn enqueue_and_send(&self, tunnel_id: u32, payload: Bytes) -> Result<()> {
+        let n = payload.len() as u64;
         let pkt = {
             let tunnel = self
                 .0
@@ -568,6 +740,8 @@ impl TunnelManager {
             let mut t = tunnel.lock().await;
             t.make_data_packet(payload)
         };
+        self.0.stats.bytes_up.fetch_add(n, Ordering::Relaxed);
+        self.0.stats.pkts_sent.fetch_add(1, Ordering::Relaxed);
         self.tx_data(pkt).await
     }
 

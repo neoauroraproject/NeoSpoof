@@ -19,7 +19,10 @@ use crate::packet::NeoPacket;
 /// actually fill a long-fat path. The live congestion window still governs the
 /// real in-flight count, so a larger cap only removes an artificial limit.
 pub const MAX_WINDOW: u32 = 512;
-/// Maximum number of times a packet will be retransmitted before giving up.
+/// Legacy retransmit cap. No longer used as a hard give-up limit: abandoning a
+/// segment wedges the cumulative-ACK window forever (see `process_nack`). Kept
+/// only as a reference threshold for diagnostics.
+#[allow(dead_code)]
 pub const MAX_RETRIES: u32 = 8;
 /// Default RTO when no RTT sample is available.
 pub const DEFAULT_RTO: Duration = Duration::from_millis(500);
@@ -129,14 +132,18 @@ impl SrArq {
     }
 
     /// Process a NACK requesting retransmission of `seq`.  Returns the packet
-    /// to resend, or `None` if `seq` is unknown or exhausted retries.
+    /// to resend, or `None` if `seq` is unknown.
+    ///
+    /// A reliable, ordered stream can never *skip* a sequence number: the
+    /// receiver's cumulative ACK stops at the first missing segment, so if the
+    /// sender ever gives up on a segment the window wedges permanently (ACK
+    /// frozen → `send_base` frozen → `in_flight` saturates `send_win` →
+    /// `can_send()` is false forever → throughput collapses to zero and never
+    /// recovers). We therefore keep retransmitting indefinitely; a genuinely
+    /// dead path is torn down by the tunnel-level stall watchdog instead.
     pub fn process_nack(&mut self, seq: u32) -> Option<NeoPacket> {
         let slot = self.send_buf.get_mut(&seq)?;
-        if slot.retry_count >= MAX_RETRIES {
-            log::warn!("ARQ: seq {} exceeded max retries – dropping", seq);
-            return None;
-        }
-        slot.retry_count += 1;
+        slot.retry_count = slot.retry_count.saturating_add(1);
         slot.sent_at = Instant::now();
         Some(slot.packet.clone())
     }
@@ -149,11 +156,13 @@ impl SrArq {
         let mut expired = Vec::new();
         for slot in self.send_buf.values_mut() {
             if now.duration_since(slot.sent_at) >= rto {
-                if slot.retry_count < MAX_RETRIES {
-                    slot.retry_count += 1;
-                    slot.sent_at = now;
-                    expired.push(slot.packet.clone());
-                }
+                // Never permanently abandon a segment (see `process_nack`): keep
+                // retransmitting on every RTO so a transient loss burst cannot
+                // wedge the window forever. The RTO itself backs off on timeout,
+                // and the tunnel watchdog reclaims a truly dead path.
+                slot.retry_count = slot.retry_count.saturating_add(1);
+                slot.sent_at = now;
+                expired.push(slot.packet.clone());
             }
         }
         expired

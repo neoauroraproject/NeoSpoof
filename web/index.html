@@ -13,7 +13,7 @@
 
   <!-- ===== Login ===== -->
   <div id="login-screen" class="login-screen">
-    <form id="login-form" class="card stack" style="width:min(440px,100%)">
+    <form id="login-form" class="card stack">
       <div class="brand">
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
         <span>نئو اسپوف</span>
@@ -38,7 +38,7 @@
 
   <!-- ===== License activation ===== -->
   <div id="license-screen" class="login-screen" hidden>
-    <form id="license-form" class="card stack" style="width:min(460px,100%)">
+    <form id="license-form" class="card stack">
       <div class="brand">
         <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="#3B82F6" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="#F97316"/></svg>
         <span>فعال‌سازی لایسنس</span>
@@ -234,87 +234,73 @@
       </section>
       </section>
 
-      <!-- Tunnels -->
+      <!-- ===== Tunnels ===== -->
       <section id="view-tunnels" class="panel" role="tabpanel" aria-labelledby="tab-tunnels" tabindex="0" hidden>
-        <div class="card stack">
-          <h2>تانل‌ها</h2>
-          <p class="muted lead">برای هر لوکیشن یک تانل بساز؛ هرکدام روی یک <b>پورت SOCKS جدا</b> بالا می‌آید. اگر آی‌پی اسپوف ندهی، آی‌پی‌های بازِ آخرین تست استفاده می‌شوند.</p>
-          <div class="grid2">
-            <label>نام لوکیشن
-              <input id="tn-name" type="text" placeholder="مثلاً آلمان">
-            </label>
-            <label>آی‌پی سرور مقصد
-              <input id="tn-peer" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45" list="peers-opts">
-            </label>
-            <label>پورت SOCKS
-              <input id="tn-socks" type="number" class="ltr" min="1024" max="65535" value="1080">
-            </label>
-          </div>
-          <label>آی‌پی‌های اسپوف (اختیاری)
-            <textarea id="tn-ips" class="ltr" spellcheck="false" placeholder="خالی = آی‌پی‌های بازِ آخرین تست"></textarea>
-          </label>
-          <p id="tn-error" class="alert" role="alert" hidden></p>
-          <div class="actions"><button id="tn-create" class="cta" type="button">افزودن تانل</button></div>
+        <div class="subswitch" role="group" aria-label="بخش تانل‌ها">
+          <button type="button" data-tnsub="work" aria-selected="true">تانل‌ها</button>
+          <button type="button" data-tnsub="fwd" aria-selected="false">فوروارد پورت</button>
         </div>
 
-        <div class="card stack">
-          <h2>افزودن سرور از کانفیگ (روی سرور مقصد)</h2>
-          <p class="muted lead">اگر این پنل روی <b>سرور مقصد</b> است: دستور یا متن <span class="ltr">server.toml</span> را که سمت مبدأ ساخته شد همین‌جا بگذار و ذخیره کن. پنل آی‌پی این سرور را خودش درست می‌کند و هستهٔ <span class="ltr">server</span> را اجرا می‌کند — بدون رفتن به ترمینال. پورت و کلید از همان کانفیگ نگه داشته می‌شوند.</p>
-          <label>نام
-            <input id="imp-name" type="text" placeholder="مثلاً سرور آلمان">
-          </label>
-          <label>کانفیگ سرور یا دستور کامل
-            <textarea id="imp-config" class="ltr" spellcheck="false" placeholder="کل دستور «دستور سرور» یا متن server.toml را این‌جا بچسبان"></textarea>
-          </label>
-          <p id="imp-error" class="alert" role="alert" hidden></p>
-          <div class="actions"><button id="imp-save" class="cta" type="button">ذخیره و اجرا</button></div>
+        <!-- Workspace: switcher + per-tunnel cards -->
+        <div id="tn-work" class="stack">
+          <div class="tn-switchbar">
+            <div id="tn-switcher" class="tn-switcher" role="tablist" aria-label="انتخاب تانل"></div>
+            <div class="tn-switchbar-actions">
+              <button id="tn-new-btn" class="cta" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                تانل جدید
+              </button>
+              <button id="tn-import-btn" class="ghost" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+                افزودن سرور از کانفیگ
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty state -->
+          <section id="tn-empty" class="card tn-empty" hidden>
+            <div class="tn-empty-art" aria-hidden="true">
+              <svg width="54" height="54" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg>
+            </div>
+            <h2>هنوز تانلی نساخته‌ای</h2>
+            <p class="muted lead">برای هر لوکیشن یک تانل بساز؛ هرکدام روی یک پورت SOCKS جدا بالا می‌آید. اگر آی‌پی اسپوف ندهی، آی‌پی‌های بازِ آخرین تست استفاده می‌شوند.</p>
+            <div class="actions">
+              <button id="tn-empty-new" class="cta" type="button">ساخت اولین تانل</button>
+              <button id="tn-empty-import" class="ghost" type="button">افزودن سرور از کانفیگ</button>
+            </div>
+          </section>
+
+          <!-- Selected tunnel workspace (built by app.js) -->
+          <div id="tn-workspace" class="stack" hidden></div>
         </div>
 
-        <div class="card stack">
-          <h2>فوروارد پورت (رد کردن سرویس از تانل)</h2>
-          <p class="muted lead">یک پورت محلی را از طریق یک تانل به یک سرویس روی سرور خارج وصل کن — برای 3x-ui، شادوساکس، VLESS یا هر پورتی (نه فقط SOCKS). سرویس روی خارج اجرا می‌شود؛ بعد در 3x-ui یک outbound به <span class="ltr">127.0.0.1:پورت‌محلی</span> بده.</p>
-          <div class="grid2">
-            <label>نام
-              <input id="fwd-name" type="text" placeholder="مثلاً shadowsocks">
-            </label>
-            <label>پورت محلی (روی ایران)
-              <input id="fwd-local" type="number" class="ltr" min="1024" max="65535" placeholder="8388">
-            </label>
-            <label>آی‌پی سرویس (روی خارج)
-              <input id="fwd-tip" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="127.0.0.1">
-            </label>
-            <label>پورت سرویس
-              <input id="fwd-tport" type="number" class="ltr" min="1" max="65535" placeholder="8388">
-            </label>
-            <label>از طریق تانل
-              <select id="fwd-tunnel"></select>
-            </label>
+        <!-- Port forward (own section) -->
+        <div id="tn-fwd" class="stack" hidden>
+          <div class="card stack">
+            <h2>فوروارد پورت (رد کردن سرویس از تانل)</h2>
+            <p class="muted lead">یک پورت محلی را از طریق یک تانل به یک سرویس روی سرور خارج وصل کن — برای 3x-ui، شادوساکس، VLESS یا هر پورتی (نه فقط SOCKS). سرویس روی خارج اجرا می‌شود؛ بعد در 3x-ui یک outbound به <span class="ltr">127.0.0.1:پورت‌محلی</span> بده.</p>
+            <div class="grid2">
+              <label>نام
+                <input id="fwd-name" type="text" placeholder="مثلاً shadowsocks">
+              </label>
+              <label>پورت محلی (روی ایران)
+                <input id="fwd-local" type="number" class="ltr" min="1024" max="65535" placeholder="8388">
+              </label>
+              <label>آی‌پی سرویس (روی خارج)
+                <input id="fwd-tip" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="127.0.0.1">
+              </label>
+              <label>پورت سرویس
+                <input id="fwd-tport" type="number" class="ltr" min="1" max="65535" placeholder="8388">
+              </label>
+              <label>از طریق تانل
+                <select id="fwd-tunnel"></select>
+              </label>
+            </div>
+            <p id="fwd-error" class="alert" role="alert" hidden></p>
+            <div class="actions"><button id="fwd-add" class="cta" type="button">افزودن فوروارد</button></div>
+            <div id="fwd-list" aria-live="polite"></div>
           </div>
-          <p id="fwd-error" class="alert" role="alert" hidden></p>
-          <div class="actions"><button id="fwd-add" class="cta" type="button">افزودن فوروارد</button></div>
-          <div id="fwd-list" aria-live="polite"></div>
         </div>
-
-        <section id="tn-list" class="card stack" aria-live="polite"></section>
-        <section id="tn-server-card" class="card stack" hidden>
-          <div class="row spread">
-            <h3>دستور سرور خارج — <span id="tn-server-name" class="ltr"></span></h3>
-            <button id="tn-server-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button>
-          </div>
-          <p class="muted lead">دو راه: ❶ اگر روی سرور مقصد هم همین پنل هست، این متن را همان‌جا در بخش «افزودن سرور از کانفیگ» بگذار و ذخیره کن (بدون ترمینال). ❷ یا این دستور را روی <b>سرور مقصد</b> در ترمینال اجرا کن؛ کانفیگ را با همان کلید و پورت ذخیره و سرور را بالا می‌آورد (باینری <span class="ltr">server</span> باید آنجا باشد).</p>
-          <label>دستور آماده
-            <textarea id="tn-server-cmd" class="ltr" readonly rows="9"></textarea>
-          </label>
-          <textarea id="tn-server-toml" hidden></textarea>
-          <div class="actions">
-            <button id="tn-server-cmd-copy" class="primary" type="button">کپی دستور</button>
-            <button id="tn-server-toml-dl" class="ghost" type="button">دانلود server.toml</button>
-          </div>
-        </section>
-        <section id="tn-logs-card" class="card stack" hidden>
-          <div class="row spread"><h3>لاگ لوکیشن</h3><button id="tn-logs-close" class="ghost icon-only" type="button" aria-label="بستن">✕</button></div>
-          <pre id="tn-logs" class="logbox ltr"></pre>
-        </section>
       </section>
 
       <!-- Settings -->
@@ -331,8 +317,8 @@
             <span class="hint">بین ۱ تا ۵۰۰. نرخ بالاتر تست را سریع‌تر ولی پرسروصداتر می‌کند.</span>
           </label>
           <div class="sep"></div>
-          <h3>تنظیمات تانل (سرعت و پایداری)</h3>
-          <p class="muted">روی کانفیگِ تانل‌های جدید اعمال می‌شوند.</p>
+          <h3>پیش‌فرض تانل‌های جدید (سرعت و پایداری)</h3>
+          <p class="muted">این مقادیر فقط به‌عنوان <b>پیش‌فرض تانل‌های تازه</b> به کار می‌روند. هر تانل را می‌توانی جداگانه از تب «تانل‌ها ← تنظیمات خودکار این تانل» تنظیم کنی.</p>
           <div class="grid2">
             <label>تعداد تانل موازی
               <input id="set-tcount" type="number" class="ltr" min="1" max="16" step="1" inputmode="numeric">
@@ -382,6 +368,53 @@
       </section>
     </main>
     </div>
+   </div>
+
+   <!-- ===== Modals ===== -->
+   <div id="tn-create-modal" class="modal" hidden>
+     <div class="modal-backdrop" data-close="tn-create-modal"></div>
+     <div class="modal-card card stack" role="dialog" aria-modal="true" aria-labelledby="tn-create-title">
+       <div class="row spread">
+         <h2 id="tn-create-title">تانل جدید</h2>
+         <button class="icon-only" type="button" data-close="tn-create-modal" aria-label="بستن">✕</button>
+       </div>
+       <p class="muted lead">برای هر لوکیشن یک تانل بساز؛ هرکدام روی یک <b>پورت SOCKS جدا</b> بالا می‌آید. اگر آی‌پی اسپوف ندهی، آی‌پی‌های بازِ آخرین تست استفاده می‌شوند.</p>
+       <div class="grid2">
+         <label>نام لوکیشن
+           <input id="tn-name" type="text" placeholder="مثلاً آلمان">
+         </label>
+         <label>آی‌پی سرور مقصد
+           <input id="tn-peer" type="text" class="ltr" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="45.45.45.45" list="peers-opts">
+         </label>
+         <label>پورت SOCKS
+           <input id="tn-socks" type="number" class="ltr" min="1024" max="65535" value="1080">
+         </label>
+       </div>
+       <label>آی‌پی‌های اسپوف (اختیاری)
+         <textarea id="tn-ips" class="ltr" spellcheck="false" placeholder="خالی = آی‌پی‌های بازِ آخرین تست"></textarea>
+       </label>
+       <p id="tn-error" class="alert" role="alert" hidden></p>
+       <div class="actions"><button id="tn-create" class="cta" type="button">افزودن تانل</button></div>
+     </div>
+   </div>
+
+   <div id="tn-import-modal" class="modal" hidden>
+     <div class="modal-backdrop" data-close="tn-import-modal"></div>
+     <div class="modal-card card stack" role="dialog" aria-modal="true" aria-labelledby="tn-import-title">
+       <div class="row spread">
+         <h2 id="tn-import-title">افزودن سرور از کانفیگ</h2>
+         <button class="icon-only" type="button" data-close="tn-import-modal" aria-label="بستن">✕</button>
+       </div>
+       <p class="muted lead">اگر این پنل روی <b>سرور مقصد</b> است: دستور یا متن <span class="ltr">server.toml</span> را که سمت مبدأ ساخته شد همین‌جا بگذار و ذخیره کن. پنل آی‌پی این سرور را خودش درست می‌کند و هستهٔ <span class="ltr">server</span> را اجرا می‌کند — بدون رفتن به ترمینال. پورت و کلید از همان کانفیگ نگه داشته می‌شوند.</p>
+       <label>نام
+         <input id="imp-name" type="text" placeholder="مثلاً سرور آلمان">
+       </label>
+       <label>کانفیگ سرور یا دستور کامل
+         <textarea id="imp-config" class="ltr" spellcheck="false" placeholder="کل دستور «دستور سرور» یا متن server.toml را این‌جا بچسبان"></textarea>
+       </label>
+       <p id="imp-error" class="alert" role="alert" hidden></p>
+       <div class="actions"><button id="imp-save" class="cta" type="button">ذخیره و اجرا</button></div>
+     </div>
    </div>
   </div>
 

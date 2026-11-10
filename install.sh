@@ -98,6 +98,9 @@ else
 fi
 
 echo ""
+echo "Tip: run 'neospoof' (or 'neospoof menu') on this server for the management menu"
+echo "     (show URL/password, restart, change port, reset password, update, uninstall)."
+echo ""
 if [ -n "$coreflags" ]; then
   echo "Spoof cores installed and wired; tunnels can be activated from the panel."
 else
